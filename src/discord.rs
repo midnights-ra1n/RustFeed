@@ -1,4 +1,4 @@
-# Recept FeedItem and built a embed
+// Recept FeedItem and built a embed
 
 pub async fn send_embed(
   webhook: &str,

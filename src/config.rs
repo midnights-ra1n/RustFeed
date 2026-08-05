@@ -1,4 +1,4 @@
-# Reads config.toml, deserializes to a config struct
+// Reads config.toml, deserializes to a config struct
 
 pub struct Config {
   pub interval: u64,

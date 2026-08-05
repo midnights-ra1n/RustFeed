@@ -1,0 +1,6 @@
+# cargo compiler instructions file
+
+[package]
+name = "RustFeed"
+version = "0.1.0"
+edition = "2024"
