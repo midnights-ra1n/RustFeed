@@ -1,0 +1,7 @@
+interval = 1800
+
+webhook = "PUT YOUR WEHBOOK"
+
+feeds = [
+  "https://www.clubic.com/feed/rss"
+]
