@@ -1,6 +1,9 @@
+# Initial configuration file
+# Interval is in seconds
+
 interval = 1800
 
-webhook = "PUT YOUR WEHBOOK"
+webhook = "PUT YOUR WEHBOOK URL HERE"
 
 feeds = [
   "https://www.clubic.com/feed/rss"

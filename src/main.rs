@@ -1,5 +1,12 @@
-pub struct Config {
-  pub interval: u64,
-  pub webhook: String,
-  pub feeds: Vec<String>,
+mod config;
+mod discord;
+mod rss;
+mod models;
+
+use std::time::Duration;
+
+#[tokio::main]
+async fn main() {
+ let config = config::load()?;
+ 
 }
