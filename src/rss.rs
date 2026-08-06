@@ -5,5 +5,4 @@ pub struct FeedItems {
   pub link: String,
   pub description: Option<String>,
   pub published: Option<String>,
-
 }

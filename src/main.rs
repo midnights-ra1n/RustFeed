@@ -6,7 +6,8 @@ mod models;
 use std::time::Duration;
 
 #[tokio::main]
-async fn main() {
+async fn main() -> anyhow::Result<()> {
  let config = config::load()?;
- 
+ println!("{:#?}", config);
+ Ok(())
 }
