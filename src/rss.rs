@@ -2,15 +2,24 @@
 
 use anyhow::Result;
 
-pub async fn fetch_feed(url: &str) -> Result<String> {
-  let response = reqwest::get(url).await?;
-  let body = response.text().await?;
-  Ok(body)
-}
+use crate::models::FeedItem;
 
-pub struct FeedItem {
-  pub title: String,
-  pub link: String,
-  pub description: Option<String>,
-  pub published: Option<String>,
+pub async fn fetch_feed(url: &str) -> Result<Vec<FeedItem>> {
+    let response = reqwest::get(url).await?;
+    let body = response.bytes().await?;
+
+    let channel = rss::Channel::read_from(&body[..])?;
+
+    let items = channel
+        .items()
+        .iter()
+        .map(|item| FeedItem {
+            title: item.title().unwrap_or("Sans titre").to_string(),
+            link: item.link().unwrap_or("").to_string(),
+            description: item.description().map(String::from),
+            published: item.pub_date().map(String::from),
+        })
+        .collect();
+
+    Ok(items)
 }
