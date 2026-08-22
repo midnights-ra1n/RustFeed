@@ -59,6 +59,8 @@ RustFeed keeps its "already sent" history in `data/seen.json` (created automatic
 
 ### Option 1 — Docker image from GHCR
 
+> The image is built and published automatically by GitHub Actions on every push to `main`, tagged `latest` and with the commit's short SHA. Note that a package pushed with `GITHUB_TOKEN` is **private by default** — after the first successful run, set its visibility to public from the package settings on GitHub if you want to pull it without authenticating.
+
 ```bash
 mkdir rustfeed && cd rustfeed
 touch config.toml   # must exist as a file before the first `docker run`, even if empty
