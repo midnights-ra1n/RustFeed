@@ -33,7 +33,11 @@ feeds = [
 
 ### Automatic config creation
 
-If `config.toml` doesn't exist yet, RustFeed creates a default one for you and exits immediately with an explanatory error. This matters when running under Docker without a terminal (`docker run` in detached mode, Compose, an orchestrator): you don't need to `exec` into the container to bootstrap the file — just mount an (empty or missing) `config.toml` on the host, start the container once, edit the file it created, and restart.
+If `config.toml` doesn't exist yet, RustFeed creates a default one for you and exits immediately with an explanatory error. This matters when running under Docker without a terminal (`docker run` in detached mode, Compose, an orchestrator): you don't need to `exec` into the container to bootstrap the file — just mount a *missing* `config.toml` path on the host, start the container once, edit the file it created, and restart.
+
+> This only works if the file is genuinely missing on the host. An empty file (e.g. from `touch config.toml`) already "exists", so RustFeed won't overwrite it and will instead fail to parse it, crash-looping forever. Fetch the pre-filled template instead (see below), or make sure the file is fully absent before the first start.
+>
+> Fetch it with `curl` (used below) or, equivalently: `wget -O config.toml https://raw.githubusercontent.com/midnights-ra1n/RustFeed/main/config.toml`
 
 RustFeed also validates the config on every startup and refuses to run if:
 - `webhook` isn't a real Discord webhook URL (still the placeholder, empty, or malformed)
@@ -63,7 +67,7 @@ RustFeed keeps its "already sent" history in `data/seen.json` (created automatic
 
 ```bash
 mkdir rustfeed && cd rustfeed
-touch config.toml   # must exist as a file before the first `docker run`, even if empty
+curl -fsSL -o config.toml https://raw.githubusercontent.com/midnights-ra1n/RustFeed/main/config.toml
 
 docker run -d \
   --name rustfeed \
@@ -96,11 +100,10 @@ services:
 ```
 
 ```bash
-touch config.toml   # same reason as above: the bind mount needs an existing file
+curl -fsSL -o config.toml https://raw.githubusercontent.com/midnights-ra1n/RustFeed/main/config.toml
 docker compose up -d --build
 
-docker compose logs -f rustfeed   # watch the first (expected) crash
-# edit config.toml with your webhook + feeds
+docker compose logs -f rustfeed   # confirm it's running, then edit config.toml with your webhook + feeds
 docker compose restart rustfeed
 ```
 
@@ -117,7 +120,7 @@ git clone https://github.com/midnights-ra1n/RustFeed.git
 cd RustFeed
 docker build -t rustfeed .
 
-touch config.toml
+curl -fsSL -o config.toml https://raw.githubusercontent.com/midnights-ra1n/RustFeed/main/config.toml
 docker run -d \
   --name rustfeed \
   --restart unless-stopped \
