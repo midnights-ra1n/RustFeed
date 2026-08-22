@@ -3,3 +3,4 @@ target/
 *.pdb
 rustc-ice-*.txt
 .dockerignore
+.DS_Store
