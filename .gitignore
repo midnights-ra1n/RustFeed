@@ -4,3 +4,4 @@ target/
 rustc-ice-*.txt
 .dockerignore
 .DS_Store
+data/

@@ -2,15 +2,15 @@ mod config;
 mod discord;
 mod rss;
 mod models;
+mod state;
 
-use std::collections::HashSet;
 use std::time::Duration;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let config = config::load()?;
     let client = reqwest::Client::new();
-    let mut seen: HashSet<String> = HashSet::new();
+    let mut seen = state::load();
     let mut interval = tokio::time::interval(Duration::from_secs(config.interval));
 
     loop {
@@ -38,6 +38,10 @@ async fn main() -> anyhow::Result<()> {
                     eprintln!("Failed to send embed for {}: {err:#}", item.link);
                 }
             }
+        }
+
+        if let Err(err) = state::save(&seen) {
+            eprintln!("Failed to save seen state: {err:#}");
         }
     }
 }
