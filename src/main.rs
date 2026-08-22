@@ -10,11 +10,16 @@ use std::time::Duration;
 async fn main() -> anyhow::Result<()> {
     let config = config::load()?;
     let client = reqwest::Client::new();
-    let mut seen = state::load();
+    let mut state = state::load();
     let mut interval = tokio::time::interval(Duration::from_secs(config.interval));
 
     loop {
         interval.tick().await;
+
+        let just_flushed = state::maybe_flush(&mut state);
+        if just_flushed {
+            eprintln!("30-day retention reached: seen history reset, re-baselining without sending notifications.");
+        }
 
         for feed in &config.feeds {
             let items = match rss::fetch_feed(feed).await {
@@ -26,7 +31,11 @@ async fn main() -> anyhow::Result<()> {
             };
 
             for item in items {
-                if !seen.insert(item.link.clone()) {
+                if !state.seen.insert(item.link.clone()) {
+                    continue;
+                }
+
+                if just_flushed {
                     continue;
                 }
 
@@ -40,7 +49,7 @@ async fn main() -> anyhow::Result<()> {
             }
         }
 
-        if let Err(err) = state::save(&seen) {
+        if let Err(err) = state::save(&state) {
             eprintln!("Failed to save seen state: {err:#}");
         }
     }

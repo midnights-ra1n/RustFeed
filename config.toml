@@ -3,7 +3,7 @@
 
 interval = 1800
 
-webhook = "put wehbook url here"
+webhook = "PUT YOUR WEBHOOK URL HERE"
 
 feeds = [
   "https://www.clubic.com/feed/rss"
