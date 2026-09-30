@@ -7,8 +7,10 @@ use std::fs;
 use std::path::Path;
 use anyhow::{bail, Context};
 use serde::Deserialize;
+use toml_edit::{Array, DocumentMut, Value};
 
 const CONFIG_PATH: &str = "config.toml";
+const DEFAULT_WEB_PORT: u16 = 3060;
 
 const DEFAULT_CONFIG: &str = r#"# RustFeed configuration file
 # Interval is in seconds
@@ -16,6 +18,9 @@ const DEFAULT_CONFIG: &str = r#"# RustFeed configuration file
 interval = 1800
 
 webhook = "PUT YOUR WEBHOOK URL HERE"
+
+# Port of the web interface used to manage feeds
+web_port = 3060
 
 feeds = [
   "https://www.clubic.com/feed/rss"
@@ -26,7 +31,14 @@ feeds = [
 pub struct Config {
     pub interval: u64,
     pub webhook: String,
+    #[serde(default = "default_web_port")]
+    pub web_port: u16,
+    #[serde(default)]
     pub feeds: Vec<String>,
+}
+
+fn default_web_port() -> u16 {
+    DEFAULT_WEB_PORT
 }
 
 pub fn load() -> anyhow::Result<Config> {
@@ -55,8 +67,36 @@ pub fn load() -> anyhow::Result<Config> {
     }
 
     if config.feeds.is_empty() {
-        bail!("config.toml: `feeds` is empty. Add at least one RSS feed URL and restart.");
+        eprintln!(
+            "config.toml: `feeds` is empty. Add RSS feeds from the web interface on port {}.",
+            config.web_port
+        );
     }
 
     Ok(config)
+}
+
+/// Rewrites only the `feeds` array of config.toml, keeping the user's comments
+/// and formatting everywhere else. The file is written in place (not renamed over)
+/// because it is usually bind-mounted as a single file in Docker.
+pub fn save_feeds(feeds: &[String]) -> anyhow::Result<()> {
+    let content = fs::read_to_string(CONFIG_PATH)
+        .context("Failed to read config.toml")?;
+    let mut doc: DocumentMut = content.parse()
+        .context("Failed to parse config.toml")?;
+
+    let mut array = Array::new();
+    for feed in feeds {
+        let mut value = Value::from(feed.as_str());
+        value.decor_mut().set_prefix("\n  ");
+        array.push_formatted(value);
+    }
+    array.set_trailing(if feeds.is_empty() { "" } else { "\n" });
+    array.set_trailing_comma(false);
+
+    doc["feeds"] = toml_edit::value(array);
+
+    fs::write(CONFIG_PATH, doc.to_string())
+        .context("Failed to write config.toml")?;
+    Ok(())
 }

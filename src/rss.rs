@@ -4,11 +4,20 @@ use anyhow::Result;
 
 use crate::models::FeedItem;
 
-pub async fn fetch_feed(url: &str) -> Result<Vec<FeedItem>> {
-    let response = reqwest::get(url).await?;
-    let body = response.bytes().await?;
+pub async fn fetch_channel(client: &reqwest::Client, url: &str) -> Result<rss::Channel> {
+    let body = client
+        .get(url)
+        .send()
+        .await?
+        .error_for_status()?
+        .bytes()
+        .await?;
 
-    let channel = rss::Channel::read_from(&body[..])?;
+    Ok(rss::Channel::read_from(&body[..])?)
+}
+
+pub async fn fetch_feed(client: &reqwest::Client, url: &str) -> Result<Vec<FeedItem>> {
+    let channel = fetch_channel(client, url).await?;
 
     let items = channel
         .items()

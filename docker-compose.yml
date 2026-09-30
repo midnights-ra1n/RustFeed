@@ -3,6 +3,8 @@ services:
     build: .
     container_name: rustfeed
     restart: unless-stopped
+    ports:
+      - "3060:3060"
     volumes:
       - ./config.toml:/app/config.toml
       - ./data:/app/data

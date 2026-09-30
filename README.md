@@ -1,6 +1,6 @@
 # RustFeed
 
-RustFeed polls one or more RSS feeds on an interval and forwards new articles to a Discord channel as embeds via a webhook. Already-sent articles are remembered on disk so restarts don't resend everything, and that history is fully reset every 30 days to keep the state file small.
+RustFeed polls one or more RSS feeds on an interval and forwards new articles to a Discord channel as embeds via a webhook. Already-sent articles are remembered on disk so restarts don't resend everything, and that history is fully reset every 30 days to keep the state file small. A built-in web interface (port `3060` by default) lets you add, edit and remove feeds without touching the config file or restarting.
 
 ## Features
 
@@ -9,6 +9,21 @@ RustFeed polls one or more RSS feeds on an interval and forwards new articles to
 - Persists which items have already been sent (`data/seen.json`) so restarts don't cause duplicate posts
 - Automatically wipes that history every 30 days without dumping the whole feed backlog into Discord afterward
 - Fails fast and loudly on invalid configuration instead of running silently broken
+- Web interface to manage feeds (add / edit / delete), with light & dark themes, served by the same binary
+
+## Web interface
+
+RustFeed serves a small web UI on `http://<host>:3060` (configurable with `web_port`). From there you can:
+
+- see every feed with its title, article count and whether it is currently reachable
+- add a feed (it is fetched and validated first)
+- edit or delete an existing feed
+
+Changes are written back to `config.toml` (comments and formatting are preserved) and applied immediately — no restart needed. When a feed is added, its current articles are marked as already seen so Discord isn't flooded with the backlog; only articles published afterwards are sent.
+
+The HTML/CSS/JS files live in `web/` and are embedded into the binary at compile time, so the executable and the Docker image stay self-contained.
+
+> The web interface has **no authentication**. Keep port 3060 on a trusted network, or put it behind a reverse proxy with authentication before exposing it.
 
 ## Configuration
 
@@ -20,16 +35,20 @@ interval = 1800
 
 webhook = "https://discord.com/api/webhooks/<id>/<token>"
 
+# Port of the web interface used to manage feeds
+web_port = 3060
+
 feeds = [
   "https://www.clubic.com/feed/rss"
 ]
 ```
 
-| Field      | Description                                              |
-|------------|------------------------------------------------------------|
-| `interval` | Delay between two poll cycles, in seconds                  |
-| `webhook`  | Discord webhook URL to post embeds to                      |
-| `feeds`    | List of RSS feed URLs to poll                               |
+| Field      | Description                                                        |
+|------------|--------------------------------------------------------------------|
+| `interval` | Delay between two poll cycles, in seconds                          |
+| `webhook`  | Discord webhook URL to post embeds to                              |
+| `web_port` | Port of the web interface (optional, defaults to `3060`)           |
+| `feeds`    | List of RSS feed URLs to poll (can also be managed from the web UI) |
 
 ### Automatic config creation
 
@@ -41,7 +60,8 @@ If `config.toml` doesn't exist yet, RustFeed creates a default one for you and e
 
 RustFeed also validates the config on every startup and refuses to run if:
 - `webhook` isn't a real Discord webhook URL (still the placeholder, empty, or malformed)
-- `feeds` is empty
+
+An empty `feeds` list is allowed: RustFeed starts, logs a warning, and waits for you to add feeds from the web interface.
 
 In any of these cases the process exits with a non-zero code and a clear message on stderr, then stops (or restarts and immediately stops again, if you're using a restart policy).
 
@@ -72,6 +92,7 @@ curl -fsSL -o config.toml https://raw.githubusercontent.com/midnights-ra1n/RustF
 docker run -d \
   --name rustfeed \
   --restart unless-stopped \
+  -p 3060:3060 \
   -v "$(pwd)/config.toml:/app/config.toml" \
   -v "$(pwd)/data:/app/data" \
   ghcr.io/midnights-ra1n/rustfeed:latest
@@ -94,6 +115,8 @@ services:
     build: .
     container_name: rustfeed
     restart: unless-stopped
+    ports:
+      - "3060:3060"
     volumes:
       - ./config.toml:/app/config.toml
       - ./data:/app/data
@@ -124,6 +147,7 @@ curl -fsSL -o config.toml https://raw.githubusercontent.com/midnights-ra1n/RustF
 docker run -d \
   --name rustfeed \
   --restart unless-stopped \
+  -p 3060:3060 \
   -v "$(pwd)/config.toml:/app/config.toml" \
   -v "$(pwd)/data:/app/data" \
   rustfeed
@@ -140,7 +164,9 @@ cargo build --release
 ./target/release/RustFeed
 ```
 
-The first run will create `config.toml` in the current directory (if missing) and exit — edit it, then run the binary again. `data/seen.json` will be created next to it automatically.
+The first run will create `config.toml` in the current directory (if missing) and exit — edit it, then run the binary again. `data/seen.json` will be created next to it automatically. The web interface is then available on http://localhost:3060.
+
+> If you change `web_port` in a Docker setup, update the `-p` / `ports:` mapping to match.
 
 ## Contributing
 

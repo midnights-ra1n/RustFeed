@@ -5,6 +5,9 @@ interval = 1800
 
 webhook = "PUT YOUR WEBHOOK URL HERE"
 
+# Port of the web interface used to manage feeds
+web_port = 3060
+
 feeds = [
   "https://www.clubic.com/feed/rss"
 ]
