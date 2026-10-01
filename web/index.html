@@ -1,0 +1,115 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>RustFeed · Flux RSS</title>
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/style.css">
+  <script>
+    // Applied before first paint to avoid a theme flash.
+    try {
+      const t = localStorage.getItem("rustfeed-theme");
+      if (t === "light" || t === "dark") document.documentElement.dataset.theme = t;
+    } catch (_) {}
+  </script>
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <svg class="logo" viewBox="0 0 24 24" aria-hidden="true">
+        <circle cx="6" cy="18" r="2.2" fill="currentColor"/>
+        <path d="M4 10.5a9.5 9.5 0 0 1 9.5 9.5" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"/>
+        <path d="M4 4a16 16 0 0 1 16 16" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"/>
+      </svg>
+      <div>
+        <h1>RustFeed</h1>
+        <p class="subtitle">Gestion des flux RSS relayés vers Discord</p>
+      </div>
+    </div>
+    <button id="theme-toggle" class="icon-btn" type="button" aria-label="Changer de thème" title="Changer de thème">
+      <svg class="icon-sun" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4.5"/><path d="M12 2v2.5M12 19.5V22M4.2 4.2l1.8 1.8M18 18l1.8 1.8M2 12h2.5M19.5 12H22M4.2 19.8 6 18M18 6l1.8-1.8"/></svg>
+      <svg class="icon-moon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20.5 14.5A8.5 8.5 0 1 1 9.5 3.5a7 7 0 0 0 11 11Z"/></svg>
+    </button>
+  </header>
+
+  <main class="container">
+    <section class="stats" aria-label="Résumé">
+      <div class="stat">
+        <span class="stat-value" id="stat-count">–</span>
+        <span class="stat-label">flux suivis</span>
+      </div>
+      <div class="stat">
+        <span class="stat-value" id="stat-ok">–</span>
+        <span class="stat-label">flux valides</span>
+      </div>
+      <div class="stat">
+        <span class="stat-value" id="stat-interval">–</span>
+        <span class="stat-label">entre deux relevés</span>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>Ajouter un flux</h2>
+      <form id="add-form" class="add-form" autocomplete="off">
+        <input id="add-url" type="url" inputmode="url" placeholder="https://exemple.com/feed.xml" required aria-label="URL du flux RSS">
+        <button id="add-btn" class="btn btn-primary" type="submit">
+          <span class="btn-label">Ajouter</span>
+        </button>
+      </form>
+      <div id="add-feedback" class="feedback" hidden></div>
+      <p class="hint">Le flux est vérifié avant l'ajout. Ses articles actuels sont marqués comme déjà lus : seuls les nouveaux seront envoyés sur Discord.</p>
+    </section>
+
+    <section class="card">
+      <div class="list-header">
+        <h2>Flux suivis</h2>
+        <input id="filter" class="filter" type="search" placeholder="Filtrer…" aria-label="Filtrer les flux">
+      </div>
+      <ul id="feed-list" class="feed-list" aria-live="polite"></ul>
+      <div id="empty" class="empty" hidden>
+        <p><strong>Aucun flux pour l'instant.</strong></p>
+        <p>Ajoutez une première URL de flux RSS ci-dessus.</p>
+      </div>
+      <div id="no-match" class="empty" hidden>
+        <p>Aucun flux ne correspond au filtre.</p>
+      </div>
+    </section>
+  </main>
+
+  <dialog id="confirm-dialog" class="dialog">
+    <form method="dialog">
+      <h3>Supprimer ce flux ?</h3>
+      <p class="dialog-url" id="confirm-url"></p>
+      <p class="muted">Il ne sera plus relevé ni relayé vers Discord.</p>
+      <div class="dialog-actions">
+        <button class="btn btn-ghost" value="cancel">Annuler</button>
+        <button class="btn btn-danger" value="confirm">Supprimer</button>
+      </div>
+    </form>
+  </dialog>
+
+  <div id="toasts" class="toasts" aria-live="polite"></div>
+
+  <template id="feed-template">
+    <li class="feed">
+      <span class="status" title="Vérification…"></span>
+      <div class="feed-main">
+        <div class="feed-title"></div>
+        <a class="feed-url" target="_blank" rel="noopener noreferrer"></a>
+      </div>
+      <span class="badge" hidden></span>
+      <div class="feed-actions">
+        <button class="icon-btn act-edit" type="button" title="Modifier" aria-label="Modifier">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20h4L19 9l-4-4L4 16v4Z"/><path d="m13.5 6.5 4 4"/></svg>
+        </button>
+        <button class="icon-btn act-delete" type="button" title="Supprimer" aria-label="Supprimer">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"/></svg>
+        </button>
+      </div>
+    </li>
+  </template>
+
+  <script src="/app.js"></script>
+</body>
+</html>
