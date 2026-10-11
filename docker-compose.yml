@@ -1,10 +1,11 @@
 services:
   rustfeed:
-    build: .
+    image: ghcr.io/midnights-ra1n/rustfeed:stable
+    # build: .   # build locally instead of pulling the published image
     container_name: rustfeed
     restart: unless-stopped
     ports:
       - "3060:3060"
     volumes:
-      - ./config.toml:/app/config.toml
+      # Everything (configuration, account, articles) lives here and is managed from the web interface.
       - ./data:/app/data

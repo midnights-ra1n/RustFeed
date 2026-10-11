@@ -72,36 +72,27 @@ services:
     ports:
       - "3060:3060"
     volumes:
-      - ./config.toml:/app/config.toml
       - ./data:/app/data
 ```
 
 ```bash
 mkdir rustfeed && cd rustfeed
-# Download the config template first: if ./config.toml doesn't exist, Docker
-# would create a *directory* with that name instead of a file.
-curl -fsSL -o config.toml https://raw.githubusercontent.com/midnights-ra1n/RustFeed/stable/config.toml
-# (or: wget -O config.toml https://raw.githubusercontent.com/midnights-ra1n/RustFeed/stable/config.toml)
-
+# save the docker-compose.yml above here, then:
 docker compose up -d
 docker compose logs rustfeed     # shows the one-time setup code
 ```
 
 Then open **http://localhost:3060** and follow [First start](#first-start-creating-your-account).
 
-The `docker-compose.yml` in this repository uses `build: .` to build the image locally. Replace it with the `image:` line above to use the published image.
+There is no configuration file to prepare or edit: everything is set up from the web interface and stored in `./data`. To build the image locally instead of pulling it, use `build: .` in place of `image:` (the repository's `docker-compose.yml` has it commented out).
 
 ### Docker run
 
 ```bash
-mkdir rustfeed && cd rustfeed
-curl -fsSL -o config.toml https://raw.githubusercontent.com/midnights-ra1n/RustFeed/stable/config.toml
-
 docker run -d \
   --name rustfeed \
   --restart unless-stopped \
   -p 3060:3060 \
-  -v "$(pwd)/config.toml:/app/config.toml" \
   -v "$(pwd)/data:/app/data" \
   ghcr.io/midnights-ra1n/rustfeed:stable
 
@@ -116,13 +107,13 @@ See [Building from source](#building-from-source).
 
 ## First start: creating your account
 
-1. Start RustFeed. If `config.toml` is missing, a default one is created and RustFeed keeps running.
+1. Start RustFeed. The configuration is created with defaults in `data/config.toml`.
 2. Look at the logs for this line:
    ```
    No account yet. Open the web interface and use this setup code: 3f9a1c0e7b2d
    ```
 3. Open the web interface, enter the setup code, choose a username and a password (10 characters minimum).
-4. Go to **Account** and add a passkey to sign in without your password next time. This needs HTTPS or `localhost`, see [below](#running-behind-a-reverse-proxy-https-passkeys-pwa).
+4. Go to **Account** and add a passkey to sign in without your password next time. The address you created the account from is saved as the passkey address. Passkeys need HTTPS or `localhost`, see [below](#running-behind-a-reverse-proxy-https-passkeys-pwa).
 5. Add feeds in **Feeds**, then set up the webhook and/or email in **Delivery**.
 
 > **Lost your password?** Stop RustFeed, delete `data/auth.json` and start it again. A new setup code is printed and you can create the account again. Feeds and settings are not affected.
@@ -138,7 +129,7 @@ The interface has four tabs. Its text is in French.
 | **Lecture** (Reader) | Latest articles from all feeds. Filter by unread/all or by feed, open an article to read it in place, mark it unread, open the original, or mark everything as read. |
 | **Flux** (Feeds) | Add a feed with its check frequency, see each feed's status (reachable, number of articles, last check), edit or delete it, and change the default frequency. |
 | **Envois** (Delivery) | Webhook (on/off, URL, test) and email (on/off, digest frequency, SMTP server, sender, recipients, template editor with live preview, test email). Click **Save** to apply. |
-| **Compte** (Account) | Manage passkeys, change the password (this signs out every other session), sign out. |
+| **Compte** (Account) | Manage passkeys, set the access settings (public address used by passkeys, reverse-proxy mode), change the password (this signs out every other session), sign out. |
 
 The refresh button at the top checks every feed right away, even if it isn't due. The sun/moon button switches between the dark and light themes. Your choice is remembered per browser.
 
@@ -146,23 +137,32 @@ The refresh button at the top checks every feed right away, even if it isn't due
 
 ## Configuration reference
 
-RustFeed reads `config.toml` from its working directory (`/app` in Docker). Everything except `web_port`, `public_url` and `behind_proxy` can be edited from the web interface. The interface rewrites the file and keeps your comments, and changes apply without a restart.
+**Everything is configured from the web interface. There is no file to edit.** Settings are stored in `data/config.toml` and apply immediately, without a restart:
+
+| Setting | Where in the interface | Default |
+| --- | --- | --- |
+| Feeds and per-feed check frequency | **Flux** | none |
+| Default check frequency | **Flux** → *Fréquence par défaut* | 30 min |
+| Webhook (on/off, URL) | **Envois** | off |
+| Email (on/off, digest frequency, SMTP, sender, recipients, templates) | **Envois** | off |
+| Public address used by passkeys | **Compte** → *Accès* → *Utiliser l'adresse actuelle* (set automatically when the account is created) | `http://localhost:3060` |
+| Reverse-proxy mode (read the client IP from `X-Forwarded-For`) | **Compte** → *Accès* | off |
+
+The web interface always listens on port `3060` inside the container. To use a different port, change the mapping (`-p 8080:3060`) instead.
+
+**Upgrading from an older version:** if a `config.toml` *file* exists in the working directory and `data/config.toml` doesn't, it is copied to `data/config.toml` once at startup, old format included (`feeds = ["https://..."]`, top-level `webhook`). A `config.toml` *directory*, which Docker creates when a missing file is bind-mounted, is ignored. You can then drop the `config.toml` volume from your compose file or `docker run` command.
+
+> The SMTP password is stored in plain text in `data/config.toml`. Keep the `data/` directory private and prefer an app-specific password.
+
+<details>
+<summary>File format, for reference only</summary>
 
 ```toml
-# Default delay between two checks of a feed, in seconds (minimum 60)
-interval = 1800
-
-# Discord (or any JSON) webhook URL, empty to disable
+interval = 1800                   # default check frequency in seconds (min 60)
 webhook = "https://discord.com/api/webhooks/<id>/<token>"
 webhook_enabled = true
-
-# Port of the web interface
 web_port = 3060
-
-# Exact address you open the interface with (needed for passkeys)
 public_url = "https://rss.example.com"
-
-# true when running behind a reverse proxy
 behind_proxy = true
 
 [[feeds]]
@@ -170,7 +170,7 @@ url = "https://www.clubic.com/feed/rss"
 
 [[feeds]]
 url = "https://www.lemonde.fr/rss/une.xml"
-interval = 900                    # optional: overrides the default for this feed
+interval = 900                    # per-feed override
 
 [mail]
 enabled = true
@@ -180,27 +180,14 @@ security = "starttls"             # "starttls", "tls" (SMTPS) or "none"
 username = "me@example.com"
 password = "app-password"
 from = "RustFeed <rss@example.com>"
-to = ["me@example.com", "friend@example.com"]
-frequency = 3600                  # minimum seconds between two digests (0 = after every check)
+to = ["me@example.com"]
+frequency = 3600                  # min seconds between two digests (0 = after every check)
 subject = "RustFeed · {{count}} nouvel(s) article(s)"
 template = "<h1>{{count}} new articles</h1>{{items}}"
 item_template = "<p><a href=\"{{link}}\">{{title}}</a><br>{{description}}</p>"
 ```
 
-| Key | Default | Description |
-| --- | --- | --- |
-| `interval` | `1800` | Default check frequency for feeds, in seconds (60 minimum). |
-| `webhook` | `""` | Webhook URL. Empty disables it. |
-| `webhook_enabled` | `true` | Turns the webhook on or off without losing its URL. |
-| `web_port` | `3060` | Port of the web interface. In Docker, update the port mapping too. |
-| `public_url` | `http://localhost:3060` | Origin used for passkeys. A value starting with `https://` also turns on `Secure` cookies and HSTS. |
-| `behind_proxy` | `false` | When `true`, the client IP (used for rate limiting and bans) is read from `X-Forwarded-For`. Only set it when a proxy is in front, otherwise clients could spoof their IP. |
-| `[[feeds]]` | | `url` (required) and `interval` (optional override, 60 s to 7 days). |
-| `[mail]` | disabled | See [Email digests](#email-digests-and-templates). |
-
-**Older config files** using `feeds = ["https://...", ...]` and a top-level `webhook` still load. They are converted to the new format the first time you save from the web interface.
-
-> The SMTP password is stored in plain text in `config.toml`. Keep the file private (`chmod 600 config.toml`) and prefer an app-specific password.
+</details>
 
 ---
 
@@ -255,14 +242,12 @@ That works with n8n, Home Assistant, Zapier/Make webhooks, custom scripts, and s
 
 ## Running behind a reverse proxy (HTTPS, passkeys, PWA)
 
-Passkeys and PWA installation require a **secure context**: HTTPS, or `http://localhost` on the machine itself. To use RustFeed from your phone, put it behind a reverse proxy that handles TLS, then set:
+Passkeys and PWA installation require a **secure context**: HTTPS, or `http://localhost` on the machine itself. To use RustFeed from your phone, put it behind a reverse proxy that handles TLS. Then open `https://rss.example.com`, and under **Compte** → **Accès**:
 
-```toml
-public_url = "https://rss.example.com"   # exactly the URL you type, without a trailing path
-behind_proxy = true
-```
+1. click **Utiliser l'adresse actuelle** (use current address) so passkeys are bound to that domain. This is done automatically if you create the account from that address;
+2. turn on **Derrière un reverse proxy** (behind a reverse proxy).
 
-Restart RustFeed after changing these. The proxy **must forward the original `Host` header**, because RustFeed checks that the `Origin` of every write request matches it (CSRF protection).
+Passkeys created on another address stop working when the address changes: add them again. With an `https://` address, cookies get the `Secure` flag and HSTS is sent. The proxy **must forward the original `Host` header**, because RustFeed checks that the `Origin` of every write request matches it (CSRF protection).
 
 **Caddy** (`Caddyfile`), which handles certificates automatically:
 
@@ -313,7 +298,7 @@ RustFeed is meant for a single owner. Here is what protects the web interface:
 | Headers | Strict CSP (`script-src 'self'`, `frame-ancestors 'none'`...), `X-Frame-Options: DENY`, `nosniff`, `Referrer-Policy: no-referrer`, a restrictive `Permissions-Policy`, COOP, and HSTS on HTTPS. |
 | Untrusted content | Feed HTML is shown in a sandboxed `iframe` with no scripts and no same-origin access. Email templates escape every article value. |
 
-What it does **not** do: there are no multiple users or roles, sessions don't survive restarts, and `config.toml` secrets are stored in plain text. Feed URLs can point anywhere, including your local network, but only you can add them.
+What it does **not** do: there are no multiple users or roles, sessions don't survive restarts, and the SMTP password is stored in plain text in `data/config.toml`. Feed URLs can point anywhere, including your local network, but only you can add them.
 
 ---
 
@@ -321,11 +306,11 @@ What it does **not** do: there are no multiple users or roles, sessions don't su
 
 | Path | Contents |
 | --- | --- |
-| `config.toml` | Configuration (feeds, webhook, mail settings and SMTP password). |
+| `data/config.toml` | Configuration (feeds, webhook, mail settings and SMTP password, access settings). Managed by the web interface. |
 | `data/seen.json` | Links already sent, the reader's articles (latest 400), read state, and the pending email queue. The sent history is reset every 30 days without re-sending anything. |
 | `data/auth.json` | Account: username, password hash, passkeys. Delete it to reset the account. |
 
-In Docker, mount both `config.toml` and `./data` (see [Quick start](#quick-start)), otherwise everything is lost when the container is recreated.
+In Docker, mount `./data` (see [Quick start](#quick-start)): it is the only volume, and without it everything is lost when the container is recreated. Back it up to back up everything.
 
 ---
 
@@ -333,7 +318,7 @@ In Docker, mount both `config.toml` and `./data` (see [Quick start](#quick-start
 
 RustFeed logs to stdout/stderr (`docker logs rustfeed`, `docker compose logs`, journald, and so on):
 
-- startup: listening address, setup code (when there is no account), passkeys disabled because of an unusable `public_url`
+- startup: listening address, setup code (when there is no account), passkeys disabled because the public address is unusable
 - new articles and the number of articles in each digest email sent
 - fetch errors per feed, webhook and SMTP errors (other feeds keep running)
 - failed logins, WAF blocks and IP bans
@@ -347,7 +332,6 @@ RustFeed logs to stdout/stderr (`docker logs rustfeed`, `docker compose logs`, j
 | --- | --- |
 | `dev` | Integration branch for ongoing work. |
 | `stable` | Release branch. Every push builds and publishes the Docker image. |
-| `main` | Default branch of the repository. |
 
 The [GitHub Actions workflow](.github/workflows/docker-publish.yml) runs on every push to `stable` (or manually from the **Actions** tab). It builds each architecture on a native GitHub runner, so there is no slow QEMU emulation, and publishes one multi-arch image to GHCR:
 
@@ -373,7 +357,7 @@ cargo build --release
 ./target/release/RustFeed
 ```
 
-RustFeed uses its working directory for `config.toml` and `data/`. The interface is then at http://localhost:3060.
+RustFeed keeps everything in `data/` under its working directory. The interface is then at http://localhost:3060.
 
 Run the tests (config parsing, WAF rules, rate limiting, CSRF check, password hashing, email rendering):
 
@@ -393,7 +377,7 @@ docker buildx build --platform linux/amd64,linux/arm64 -t rustfeed .
 ```
 src/
   main.rs      polling loop, scheduling, webhook dispatch, digest sending
-  config.rs    config.toml loading/saving (legacy format compatible)
+  config.rs    data/config.toml loading/saving, legacy migration
   rss.rs       feed download and parsing
   state.rs     sent history, reader articles, read state, mail queue
   discord.rs   webhook sender (Discord embed or generic JSON)
@@ -408,15 +392,15 @@ web/           HTML/CSS/JS, PWA manifest, service worker, icons (embedded at com
 
 ## Troubleshooting
 
-**"Is a directory" error, or the container keeps restarting at startup.** `config.toml` didn't exist on the host when the container started, so Docker created a directory with that name. Remove it and download the template with the `curl` command from [Quick start](#quick-start). An *empty* file doesn't work either: it fails to parse.
+**"Is a directory" error with an older version.** Older versions read `./config.toml`, and Docker creates a directory when a missing file is bind-mounted. Current versions only use `data/`: update the image, remove the `config.toml` volume and the `config.toml` directory on the host.
 
 **I can't find the setup code.** It is only printed while no account exists: `docker logs rustfeed | grep "setup code"`. A new one is generated on every start until the account is created.
 
-**There's no "add passkey" form, or it says passkeys are disabled.** The address in your browser bar must be exactly `public_url`, and it must be HTTPS or `localhost`. IP addresses (`http://192.168.1.10:3060`) cannot use passkeys. Fix `public_url` and restart.
+**There's no "add passkey" form, or it says passkeys are disabled.** Passkeys work on one address only: open **Compte** → **Accès** and click **Utiliser l'adresse actuelle**. The address must be a domain name over HTTPS, or `localhost`. IP addresses (`http://192.168.1.10:3060`) cannot use passkeys.
 
 **"Origine refusée" (origin refused) on every action behind a proxy.** The proxy isn't forwarding the `Host` header. Add `proxy_set_header Host $host;` (nginx).
 
-**"Adresse temporairement bloquée" (address temporarily blocked).** Your IP has 5 strikes (for example, wrong passwords) and is banned for 15 minutes. Behind a proxy without `behind_proxy = true`, every client shares the proxy's IP, so set it.
+**"Adresse temporairement bloquée" (address temporarily blocked).** Your IP has 5 strikes (for example, wrong passwords) and is banned for 15 minutes. Behind a proxy without reverse-proxy mode, every client shares the proxy's IP: turn it on in **Compte** → **Accès**.
 
 **I added a feed and nothing was sent.** This is expected: the articles already in a new feed are marked as sent. Only articles published afterwards are delivered, and they still show up in the reader.
 

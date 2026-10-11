@@ -49,6 +49,7 @@ pub async fn serve(listener: tokio::net::TcpListener, app: SharedState) -> anyho
         .route("/api/settings/preview", post(preview_mail))
         .route("/api/account", get(account))
         .route("/api/account/password", post(change_password))
+        .route("/api/account/access", post(set_access))
         .route("/api/account/passkey/start", post(passkey_register_start))
         .route("/api/account/passkey/finish", post(passkey_register_finish))
         .route("/api/account/passkey", delete(passkey_delete))
@@ -140,7 +141,7 @@ async fn auth_status(State(app): State<SharedState>, headers: HeaderMap) -> Json
     Json(json!({
         "setup_required": account.is_none(),
         "authenticated": authenticated,
-        "passkeys": app.auth.webauthn.is_some() && account.is_some_and(|a| !a.passkeys.is_empty()),
+        "passkeys": app.auth.webauthn().is_some() && account.is_some_and(|a| !a.passkeys.is_empty()),
     }))
 }
 
@@ -164,6 +165,7 @@ fn validate_password(password: &str) -> ApiResult<()> {
 async fn setup(
     State(app): State<SharedState>,
     Extension(ip): Extension<IpAddr>,
+    headers: HeaderMap,
     Json(body): Json<SetupBody>,
 ) -> ApiResult<Response> {
     let username = body.username.trim().to_string();
@@ -181,6 +183,13 @@ async fn setup(
         return Err(ApiError(StatusCode::FORBIDDEN, "Code d'installation invalide.".into()));
     }
     println!("Account created from {ip}.");
+    // The address used to create the account becomes the passkey origin.
+    if let Some(origin) = headers.get(header::ORIGIN).and_then(|v| v.to_str().ok()).and_then(|o| validate_url(o).ok()) {
+        let origin = origin.trim_end_matches('/').to_string();
+        if update_config(&app, |c| { c.public_url = origin.clone(); Ok(()) }).is_ok() {
+            app.auth.set_public_url(&origin);
+        }
+    }
     Ok(logged_in(&app))
 }
 
@@ -253,9 +262,51 @@ async fn account(State(app): State<SharedState>) -> ApiResult<Json<Value>> {
     Ok(Json(json!({
         "username": acc.username,
         "passkeys": passkeys,
-        "passkeys_available": app.auth.webauthn.is_some(),
+        "passkeys_available": app.auth.webauthn().is_some(),
         "public_url": app.config.read().unwrap().public_url,
+        "behind_proxy": app.config.read().unwrap().behind_proxy,
     })))
+}
+
+#[derive(Deserialize)]
+struct AccessBody {
+    behind_proxy: bool,
+    /// Sets `public_url` to the address the browser is using right now.
+    #[serde(default)]
+    use_current_origin: bool,
+}
+
+/// The public address is only ever set to the origin the request comes from, so it
+/// always matches an address that works (no lock-out with a wrong https:// value).
+async fn set_access(
+    State(app): State<SharedState>,
+    headers: HeaderMap,
+    Json(body): Json<AccessBody>,
+) -> ApiResult<Response> {
+    let origin = if body.use_current_origin {
+        let origin = headers.get(header::ORIGIN).and_then(|v| v.to_str().ok())
+            .ok_or_else(|| bad_request("En-tête Origin manquant."))?;
+        Some(validate_url(origin)?.trim_end_matches('/').to_string())
+    } else {
+        None
+    };
+    update_config(&app, |c| {
+        c.behind_proxy = body.behind_proxy;
+        if let Some(origin) = &origin {
+            c.public_url = origin.clone();
+        }
+        Ok(())
+    })?;
+    if let Some(origin) = &origin {
+        if !app.auth.set_public_url(origin) {
+            return Err(bad_request("Adresse enregistrée, mais les passkeys exigent un nom de domaine (pas une IP) en HTTPS ou localhost."));
+        }
+    }
+    // Re-issue the cookie so its Secure flag follows the new address.
+    let token = session_token(&headers).unwrap_or_default();
+    let mut res = account(State(app.clone())).await?.into_response();
+    res.headers_mut().insert(header::SET_COOKIE, session_cookie(&app, &token, auth::SESSION_TTL));
+    Ok(res)
 }
 
 #[derive(Deserialize)]
@@ -378,7 +429,7 @@ fn update_config(app: &AppState, change: impl FnOnce(&mut config::Config) -> Api
     change(&mut next)?;
     config::save(&next).map_err(|err| {
         eprintln!("Failed to save config: {err:#}");
-        ApiError(StatusCode::INTERNAL_SERVER_ERROR, format!("Impossible d'écrire config.toml : {err:#}"))
+        ApiError(StatusCode::INTERNAL_SERVER_ERROR, format!("Impossible d'enregistrer la configuration : {err:#}"))
     })?;
     *current = next;
     Ok(())

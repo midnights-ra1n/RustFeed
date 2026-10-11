@@ -1,8 +1,7 @@
-// Reads config.toml, deserializes to a config struct.
-// If the file is missing, a default one is created automatically so a container
-// started without an interactive terminal (docker run / docker compose) still
-// ends up with an editable config.toml on its mounted volume. Everything else
-// (feeds, webhook, mail) can then be configured from the web interface.
+// Configuration, stored in data/config.toml and managed from the web interface:
+// nothing has to be edited by hand. The file is created with defaults on first
+// start, so mounting the data/ volume is enough. An old ./config.toml (from
+// versions that needed it) is migrated once if it is a real file.
 
 use std::fs;
 use std::path::Path;
@@ -10,31 +9,18 @@ use anyhow::Context;
 use serde::{Deserialize, Deserializer, Serialize};
 use toml_edit::DocumentMut;
 
-const CONFIG_PATH: &str = "config.toml";
+const CONFIG_DIR: &str = "data";
+const CONFIG_PATH: &str = "data/config.toml";
+const LEGACY_CONFIG_PATH: &str = "config.toml";
 
-const DEFAULT_CONFIG: &str = r#"# RustFeed configuration file
-# Everything below can also be changed from the web interface.
+const DEFAULT_CONFIG: &str = r#"# RustFeed configuration, managed from the web interface.
 
-# Default delay between two checks of a feed, in seconds
 interval = 1800
-
-# Discord (or any JSON) webhook URL, leave empty to disable
 webhook = ""
-
-# Port of the web interface
 web_port = 3060
-
-# Address you open the web interface with. Passkeys only work on this exact
-# origin (https://..., or http://localhost).
 public_url = "http://localhost:3060"
-
-# Set to true when RustFeed runs behind a reverse proxy, so rate limiting
-# uses the client IP from X-Forwarded-For instead of the proxy IP.
 behind_proxy = false
-
-feeds = [
-  "https://www.clubic.com/feed/rss"
-]
+feeds = []
 "#;
 
 pub const DEFAULT_MAIL_SUBJECT: &str = "RustFeed · {{count}} nouvel(s) article(s)";
@@ -155,42 +141,49 @@ fn feeds_compat<'de, D: Deserializer<'de>>(de: D) -> Result<Vec<Feed>, D::Error>
 }
 
 pub fn load() -> anyhow::Result<Config> {
+    fs::create_dir_all(CONFIG_DIR).context("Failed to create the data directory")?;
     if !Path::new(CONFIG_PATH).exists() {
-        fs::write(CONFIG_PATH, DEFAULT_CONFIG)
-            .context("Failed to create default config.toml")?;
-        println!("No config.toml found: a default one was created at ./{CONFIG_PATH}.");
+        // Docker creates a *directory* when a missing file is bind-mounted: ignore that.
+        if Path::new(LEGACY_CONFIG_PATH).is_file() {
+            fs::copy(LEGACY_CONFIG_PATH, CONFIG_PATH).context("Failed to migrate ./config.toml")?;
+            println!("Migrated ./config.toml to ./{CONFIG_PATH}. The old file is no longer used.");
+        } else {
+            fs::write(CONFIG_PATH, DEFAULT_CONFIG).context("Failed to create the default configuration")?;
+            println!("Created a default configuration in ./{CONFIG_PATH}.");
+        }
     }
 
     let content = fs::read_to_string(CONFIG_PATH)
-        .context("Failed to read config.toml")?;
+        .context("Failed to read data/config.toml")?;
 
-    let config: Config = toml::from_str(&content)
-        .context("Failed to parse config.toml")?;
+    let mut config: Config = toml::from_str(&content)
+        .context("Failed to parse data/config.toml")?;
 
-    if config.interval < 60 {
-        anyhow::bail!("config.toml: `interval` must be at least 60 seconds.");
-    }
+    // The web interface enforces this; only a hand-edited file can get here.
+    config.interval = config.interval.max(60);
 
     Ok(config)
 }
 
-/// Rewrites config.toml from `config`, keeping the user's comments on the keys
-/// that already exist. The file is written in place (not renamed over) because
-/// it is usually bind-mounted as a single file in Docker.
+/// Rewrites data/config.toml from `config`, keeping comments on existing keys.
 pub fn save(config: &Config) -> anyhow::Result<()> {
     let content = fs::read_to_string(CONFIG_PATH).unwrap_or_default();
     let mut doc: DocumentMut = content.parse()
-        .context("Failed to parse config.toml")?;
+        .context("Failed to parse data/config.toml")?;
     let fresh: DocumentMut = toml::to_string(config)
         .context("Failed to serialize config")?
         .parse()?;
 
     for (key, item) in fresh.iter() {
+        // A value turning into a table (feeds = [] -> [[feeds]]) can't keep the old key's formatting.
+        if doc.get(key).is_some_and(|old| old.is_value() != item.is_value()) {
+            doc.remove(key);
+        }
         doc[key] = item.clone();
     }
 
     fs::write(CONFIG_PATH, doc.to_string())
-        .context("Failed to write config.toml")?;
+        .context("Failed to write data/config.toml")?;
     Ok(())
 }
 

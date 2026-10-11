@@ -6,7 +6,7 @@
 
 use std::collections::HashMap;
 use std::fs;
-use std::sync::Mutex;
+use std::sync::{Mutex, RwLock};
 
 use anyhow::{Context, Result};
 use argon2::password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, SaltString};
@@ -42,7 +42,8 @@ pub struct Auth {
     pub setup_code: String,
     /// token -> expiry
     sessions: Mutex<HashMap<String, u64>>,
-    pub webauthn: Option<Webauthn>,
+    /// Rebuilt when `public_url` changes from the web interface.
+    webauthn: RwLock<Option<Webauthn>>,
     /// session token -> pending registration
     registrations: Mutex<HashMap<String, (PasskeyRegistration, u64)>>,
     /// ceremony id -> pending login
@@ -101,10 +102,22 @@ impl Auth {
             account: Mutex::new(account),
             setup_code,
             sessions: Mutex::new(HashMap::new()),
-            webauthn: build_webauthn(public_url),
+            webauthn: RwLock::new(build_webauthn(public_url)),
             registrations: Mutex::new(HashMap::new()),
             logins: Mutex::new(HashMap::new()),
         }
+    }
+
+    pub fn webauthn(&self) -> Option<Webauthn> {
+        self.webauthn.read().unwrap().clone()
+    }
+
+    /// Returns false when the address can't be used for passkeys (IP, invalid URL...).
+    pub fn set_public_url(&self, public_url: &str) -> bool {
+        let built = build_webauthn(public_url);
+        let ok = built.is_some();
+        *self.webauthn.write().unwrap() = built;
+        ok
     }
 
     pub fn account(&self) -> Option<Account> {
@@ -185,7 +198,7 @@ impl Auth {
     // ----- passkeys -----
 
     pub fn start_registration(&self, session: &str) -> Result<CreationChallengeResponse> {
-        let webauthn = self.webauthn.as_ref().context("Passkeys indisponibles (public_url)")?;
+        let webauthn = self.webauthn().context("Passkeys indisponibles (adresse publique)")?;
         let acc = self.account().context("Aucun compte")?;
         let exclude = acc.passkeys.iter().map(|p| p.passkey.cred_id().clone()).collect();
         let (ccr, state) = webauthn.start_passkey_registration(acc.user_id, &acc.username, &acc.username, Some(exclude))?;
@@ -194,7 +207,7 @@ impl Auth {
     }
 
     pub fn finish_registration(&self, session: &str, name: &str, cred: &RegisterPublicKeyCredential) -> Result<()> {
-        let webauthn = self.webauthn.as_ref().context("Passkeys indisponibles")?;
+        let webauthn = self.webauthn().context("Passkeys indisponibles")?;
         let (state, exp) = self.registrations.lock().unwrap().remove(session).context("Aucun enregistrement en cours")?;
         anyhow::ensure!(exp > now(), "Délai dépassé, recommencez.");
         let passkey = webauthn.finish_passkey_registration(cred, &state)?;
@@ -209,7 +222,7 @@ impl Auth {
     }
 
     pub fn start_login(&self) -> Result<(String, RequestChallengeResponse)> {
-        let webauthn = self.webauthn.as_ref().context("Passkeys indisponibles")?;
+        let webauthn = self.webauthn().context("Passkeys indisponibles")?;
         let acc = self.account().context("Aucun compte")?;
         anyhow::ensure!(!acc.passkeys.is_empty(), "Aucune passkey enregistrée.");
         let keys: Vec<Passkey> = acc.passkeys.iter().map(|p| p.passkey.clone()).collect();
@@ -223,7 +236,7 @@ impl Auth {
     }
 
     pub fn finish_login(&self, id: &str, cred: &PublicKeyCredential) -> Result<()> {
-        let webauthn = self.webauthn.as_ref().context("Passkeys indisponibles")?;
+        let webauthn = self.webauthn().context("Passkeys indisponibles")?;
         let (state, exp) = self.logins.lock().unwrap().remove(id).context("Aucune connexion en cours")?;
         anyhow::ensure!(exp > now(), "Délai dépassé, recommencez.");
         let result = webauthn.finish_passkey_authentication(cred, &state)?;
