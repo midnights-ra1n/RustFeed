@@ -1,87 +1,259 @@
 <!doctype html>
-<html lang="fr">
+<html lang="fr" data-theme="dark">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>RustFeed · Flux RSS</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#120e0d">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="RustFeed">
+  <title>RustFeed</title>
   <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="/icon-192.png">
+  <link rel="manifest" href="/manifest.webmanifest">
   <link rel="stylesheet" href="/style.css">
-  <script>
-    // Applied before first paint to avoid a theme flash.
-    try {
-      const t = localStorage.getItem("rustfeed-theme");
-      if (t === "light" || t === "dark") document.documentElement.dataset.theme = t;
-    } catch (_) {}
-  </script>
+  <!-- Blocking on purpose: applies the saved theme before first paint. -->
+  <script src="/theme.js"></script>
+  <script src="/app.js" defer></script>
 </head>
 <body>
-  <header class="topbar">
-    <div class="brand">
-      <svg class="logo" viewBox="0 0 24 24" aria-hidden="true">
-        <circle cx="6" cy="18" r="2.2" fill="currentColor"/>
-        <path d="M4 10.5a9.5 9.5 0 0 1 9.5 9.5" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"/>
-        <path d="M4 4a16 16 0 0 1 16 16" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"/>
-      </svg>
-      <div>
-        <h1>RustFeed</h1>
-        <p class="subtitle">Gestion des flux RSS relayés vers Discord</p>
-      </div>
-    </div>
-    <button id="theme-toggle" class="icon-btn" type="button" aria-label="Changer de thème" title="Changer de thème">
-      <svg class="icon-sun" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4.5"/><path d="M12 2v2.5M12 19.5V22M4.2 4.2l1.8 1.8M18 18l1.8 1.8M2 12h2.5M19.5 12H22M4.2 19.8 6 18M18 6l1.8-1.8"/></svg>
-      <svg class="icon-moon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20.5 14.5A8.5 8.5 0 1 1 9.5 3.5a7 7 0 0 0 11 11Z"/></svg>
-    </button>
-  </header>
+  <svg width="0" height="0" style="position:absolute" aria-hidden="true">
+    <defs>
+      <linearGradient id="brand-grad" x1="0" y1="0" x2="1" y2="1">
+        <stop offset="0" stop-color="#ff9a3c"/><stop offset="1" stop-color="#ff5c8a"/>
+      </linearGradient>
+    </defs>
+    <symbol id="i-logo" viewBox="0 0 24 24"><rect width="24" height="24" rx="7" fill="url(#brand-grad)"/><circle cx="7" cy="17" r="1.9" fill="#fff"/><path d="M5.5 10.5a8 8 0 0 1 8 8M5.5 5a13.5 13.5 0 0 1 13.5 13.5" fill="none" stroke="#fff" stroke-width="2.2" stroke-linecap="round"/></symbol>
+    <symbol id="i-read" viewBox="0 0 24 24"><path d="M4 5.5A1.5 1.5 0 0 1 5.5 4H11v16H5.5A1.5 1.5 0 0 1 4 18.5ZM13 4h5.5A1.5 1.5 0 0 1 20 5.5v13a1.5 1.5 0 0 1-1.5 1.5H13Z"/></symbol>
+    <symbol id="i-rss" viewBox="0 0 24 24"><circle cx="6" cy="18" r="1.6"/><path d="M4.5 11a8.5 8.5 0 0 1 8.5 8.5M4.5 4.5a15 15 0 0 1 15 15"/></symbol>
+    <symbol id="i-send" viewBox="0 0 24 24"><path d="M21 3 10 14M21 3l-7 18-4-7-7-4Z"/></symbol>
+    <symbol id="i-user" viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/></symbol>
+    <symbol id="i-refresh" viewBox="0 0 24 24"><path d="M20 11a8 8 0 0 0-14.7-4.3L4 8M4 4v4h4M4 13a8 8 0 0 0 14.7 4.3L20 16m0 4v-4h-4"/></symbol>
+    <symbol id="i-sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4.5"/><path d="M12 2v2.5M12 19.5V22M4.2 4.2 6 6M18 18l1.8 1.8M2 12h2.5M19.5 12H22M4.2 19.8 6 18M18 6l1.8-1.8"/></symbol>
+    <symbol id="i-moon" viewBox="0 0 24 24"><path d="M20.5 14.5A8.5 8.5 0 1 1 9.5 3.5a7 7 0 0 0 11 11Z"/></symbol>
+    <symbol id="i-edit" viewBox="0 0 24 24"><path d="M4 20h4L19 9l-4-4L4 16v4Z"/><path d="m13.5 6.5 4 4"/></symbol>
+    <symbol id="i-trash" viewBox="0 0 24 24"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"/></symbol>
+    <symbol id="i-back" viewBox="0 0 24 24"><path d="M15 5 8 12l7 7"/></symbol>
+    <symbol id="i-external" viewBox="0 0 24 24"><path d="M14 4h6v6M20 4l-9 9M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5"/></symbol>
+    <symbol id="i-check" viewBox="0 0 24 24"><path d="m5 12 5 5 9-10"/></symbol>
+    <symbol id="i-key" viewBox="0 0 24 24"><circle cx="8" cy="15" r="4"/><path d="m11 12 9-9M17 6l3 3M14 9l2 2"/></symbol>
+  </svg>
 
-  <main class="container">
-    <section class="stats" aria-label="Résumé">
-      <div class="stat">
-        <span class="stat-value" id="stat-count">–</span>
-        <span class="stat-label">flux suivis</span>
-      </div>
-      <div class="stat">
-        <span class="stat-value" id="stat-ok">–</span>
-        <span class="stat-label">flux valides</span>
-      </div>
-      <div class="stat">
-        <span class="stat-value" id="stat-interval">–</span>
-        <span class="stat-label">entre deux relevés</span>
-      </div>
-    </section>
+  <!-- ============ Auth screen ============ -->
+  <section id="auth" class="auth" hidden>
+    <div class="auth-card">
+      <svg class="auth-logo"><use href="#i-logo"/></svg>
+      <h1 class="grad-text">RustFeed</h1>
 
-    <section class="card">
-      <h2>Ajouter un flux</h2>
-      <form id="add-form" class="add-form" autocomplete="off">
-        <input id="add-url" type="url" inputmode="url" placeholder="https://exemple.com/feed.xml" required aria-label="URL du flux RSS">
-        <button id="add-btn" class="btn btn-primary" type="submit">
-          <span class="btn-label">Ajouter</span>
-        </button>
+      <form id="login-form" class="stack" hidden>
+        <p class="muted center">Connectez-vous pour gérer vos flux.</p>
+        <label class="field"><span>Utilisateur</span><input name="username" autocomplete="username webauthn" required></label>
+        <label class="field"><span>Mot de passe</span><input name="password" type="password" autocomplete="current-password" required></label>
+        <button class="btn btn-primary btn-block" type="submit">Se connecter</button>
+        <div id="passkey-login" class="stack" hidden>
+          <div class="divider"><span>ou</span></div>
+          <button id="passkey-login-btn" class="btn btn-ghost btn-block" type="button"><svg class="ico"><use href="#i-key"/></svg>Utiliser une passkey</button>
+        </div>
       </form>
-      <div id="add-feedback" class="feedback" hidden></div>
-      <p class="hint">Le flux est vérifié avant l'ajout. Ses articles actuels sont marqués comme déjà lus : seuls les nouveaux seront envoyés sur Discord.</p>
-    </section>
 
-    <section class="card">
-      <div class="list-header">
-        <h2>Flux suivis</h2>
-        <input id="filter" class="filter" type="search" placeholder="Filtrer…" aria-label="Filtrer les flux">
-      </div>
-      <ul id="feed-list" class="feed-list" aria-live="polite"></ul>
-      <div id="empty" class="empty" hidden>
-        <p><strong>Aucun flux pour l'instant.</strong></p>
-        <p>Ajoutez une première URL de flux RSS ci-dessus.</p>
-      </div>
-      <div id="no-match" class="empty" hidden>
-        <p>Aucun flux ne correspond au filtre.</p>
-      </div>
-    </section>
-  </main>
+      <form id="setup-form" class="stack" hidden>
+        <p class="muted center">Première connexion : créez votre compte. Le code d'installation est affiché dans les logs du serveur.</p>
+        <label class="field"><span>Code d'installation</span><input name="code" autocomplete="one-time-code" required spellcheck="false"></label>
+        <label class="field"><span>Utilisateur</span><input name="username" autocomplete="username" required maxlength="64"></label>
+        <label class="field"><span>Mot de passe <small>(10 caractères min.)</small></span><input name="password" type="password" autocomplete="new-password" minlength="10" required></label>
+        <label class="field"><span>Confirmation</span><input name="confirm" type="password" autocomplete="new-password" minlength="10" required></label>
+        <button class="btn btn-primary btn-block" type="submit">Créer le compte</button>
+      </form>
+      <p id="auth-error" class="form-error" role="alert" hidden></p>
+    </div>
+  </section>
+
+  <!-- ============ App ============ -->
+  <div id="app" class="app" hidden>
+    <aside class="nav" aria-label="Navigation">
+      <div class="nav-brand"><svg class="nav-logo"><use href="#i-logo"/></svg><span class="grad-text">RustFeed</span></div>
+      <a class="nav-item" href="#reader" data-view="reader"><svg class="ico"><use href="#i-read"/></svg><span>Lecture</span><b id="unread-badge" class="nav-badge" hidden></b></a>
+      <a class="nav-item" href="#feeds" data-view="feeds"><svg class="ico"><use href="#i-rss"/></svg><span>Flux</span></a>
+      <a class="nav-item" href="#delivery" data-view="delivery"><svg class="ico"><use href="#i-send"/></svg><span>Envois</span></a>
+      <a class="nav-item" href="#account" data-view="account"><svg class="ico"><use href="#i-user"/></svg><span>Compte</span></a>
+    </aside>
+
+    <div class="main">
+      <header class="topbar">
+        <h2 id="view-title">Lecture</h2>
+        <div class="topbar-actions">
+          <button id="refresh-btn" class="icon-btn" type="button" title="Relever les flux maintenant" aria-label="Relever les flux maintenant"><svg class="ico"><use href="#i-refresh"/></svg></button>
+          <button id="theme-toggle" class="icon-btn" type="button" title="Changer de thème" aria-label="Changer de thème"><svg class="ico icon-sun"><use href="#i-sun"/></svg><svg class="ico icon-moon"><use href="#i-moon"/></svg></button>
+        </div>
+      </header>
+
+      <!-- Reader -->
+      <section id="view-reader" class="view reader">
+        <div class="reader-list">
+          <div class="toolbar">
+            <div class="segmented" role="tablist">
+              <button type="button" class="seg active" data-filter="unread">Non lus</button>
+              <button type="button" class="seg" data-filter="all">Tous</button>
+            </div>
+            <select id="reader-feed" class="select-sm" aria-label="Filtrer par flux"><option value="">Tous les flux</option></select>
+            <button id="mark-all" class="btn btn-ghost btn-sm" type="button"><svg class="ico"><use href="#i-check"/></svg>Tout lu</button>
+          </div>
+          <ul id="items" class="items"></ul>
+          <div id="items-empty" class="empty" hidden>
+            <div class="empty-art"><svg><use href="#i-read"/></svg></div>
+            <p><strong>Rien à lire.</strong></p>
+            <p class="muted">Les nouveaux articles de vos flux apparaîtront ici.</p>
+          </div>
+        </div>
+        <article id="article" class="article" aria-live="polite">
+          <div class="article-empty"><svg><use href="#i-logo"/></svg><p class="muted">Sélectionnez un article</p></div>
+          <div class="article-body" hidden>
+            <div class="article-bar">
+              <button id="article-back" class="icon-btn" type="button" aria-label="Retour"><svg class="ico"><use href="#i-back"/></svg></button>
+              <span class="spacer"></span>
+              <button id="article-unread" class="btn btn-ghost btn-sm" type="button">Marquer non lu</button>
+              <a id="article-open" class="btn btn-primary btn-sm" target="_blank" rel="noopener noreferrer"><svg class="ico"><use href="#i-external"/></svg>Original</a>
+            </div>
+            <div class="article-head">
+              <div id="article-feed" class="eyebrow"></div>
+              <h1 id="article-title"></h1>
+              <div id="article-date" class="muted small"></div>
+            </div>
+            <!-- Feed HTML is untrusted: rendered in a sandboxed frame with scripts disabled. -->
+            <iframe id="article-frame" class="article-frame" sandbox="allow-popups allow-popups-to-escape-sandbox" referrerpolicy="no-referrer" title="Contenu de l'article"></iframe>
+          </div>
+        </article>
+      </section>
+
+      <!-- Feeds -->
+      <section id="view-feeds" class="view" hidden>
+        <div class="card hero">
+          <h3>Ajouter un flux</h3>
+          <form id="add-form" class="add-form" autocomplete="off">
+            <input id="add-url" type="url" inputmode="url" placeholder="https://exemple.com/feed.xml" required aria-label="URL du flux RSS">
+            <select id="add-interval" aria-label="Fréquence de vérification"></select>
+            <button id="add-btn" class="btn btn-primary" type="submit">Ajouter</button>
+          </form>
+          <p class="hint">Le flux est vérifié avant l'ajout. Ses articles actuels sont marqués comme déjà envoyés : seules les nouveautés seront notifiées.</p>
+        </div>
+
+        <div class="card">
+          <div class="card-head">
+            <h3>Flux suivis <span id="feed-count" class="pill"></span></h3>
+            <label class="inline-field">Fréquence par défaut <select id="default-interval"></select></label>
+          </div>
+          <ul id="feed-list" class="feed-list"></ul>
+          <div id="feeds-empty" class="empty" hidden>
+            <p><strong>Aucun flux pour l'instant.</strong></p>
+            <p class="muted">Ajoutez une première URL de flux RSS ci-dessus.</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- Delivery -->
+      <section id="view-delivery" class="view" hidden>
+        <form id="delivery-form" class="stack-lg" autocomplete="off">
+          <div class="card">
+            <div class="card-head">
+              <div><h3>Webhook</h3><p class="muted small">Discord, ou tout service acceptant un POST JSON.</p></div>
+              <label class="switch"><input id="webhook-enabled" type="checkbox"><span></span><em class="sr-only">Activer le webhook</em></label>
+            </div>
+            <div class="row">
+              <label class="field grow"><span>URL du webhook</span><input id="webhook-url" type="url" placeholder="https://discord.com/api/webhooks/…"></label>
+              <button id="webhook-test" class="btn btn-ghost" type="button">Tester</button>
+            </div>
+            <p class="hint">Un message par nouvel article, dès qu'il est détecté.</p>
+          </div>
+
+          <div class="card">
+            <div class="card-head">
+              <div><h3>E-mail</h3><p class="muted small">Un résumé groupé, à la fréquence de votre choix.</p></div>
+              <label class="switch"><input id="mail-enabled" type="checkbox"><span></span><em class="sr-only">Activer l'e-mail</em></label>
+            </div>
+
+            <label class="field"><span>Fréquence d'envoi</span><select id="mail-frequency"></select></label>
+            <p class="hint">Les nouveautés sont regroupées dans un seul mail au plus une fois par période : fini le bombardement.</p>
+
+            <details class="sub" open>
+              <summary>Serveur SMTP</summary>
+              <div class="grid">
+                <label class="field span-2"><span>Serveur</span><input id="smtp-host" placeholder="smtp.exemple.com" spellcheck="false"></label>
+                <label class="field"><span>Port</span><input id="smtp-port" type="number" min="1" max="65535" inputmode="numeric"></label>
+                <label class="field"><span>Sécurité</span>
+                  <select id="smtp-security"><option value="starttls">STARTTLS</option><option value="tls">TLS (SMTPS)</option><option value="none">Aucune</option></select>
+                </label>
+                <label class="field"><span>Utilisateur</span><input id="smtp-user" autocomplete="off" spellcheck="false"></label>
+                <label class="field"><span>Mot de passe</span><input id="smtp-pass" type="password" autocomplete="new-password"></label>
+                <label class="field span-2"><span>Expéditeur</span><input id="mail-from" placeholder="RustFeed &lt;rss@exemple.com&gt;"></label>
+                <label class="field span-2"><span>Destinataires <small>(séparés par des virgules)</small></span><input id="mail-to" placeholder="moi@exemple.com"></label>
+              </div>
+            </details>
+
+            <details class="sub">
+              <summary>Personnaliser le mail</summary>
+              <div class="stack">
+                <label class="field"><span>Sujet</span><input id="mail-subject"></label>
+                <label class="field"><span>Gabarit du mail (HTML)</span><textarea id="mail-template" rows="9" spellcheck="false"></textarea></label>
+                <label class="field"><span>Gabarit d'un article (HTML, répété pour chaque article)</span><textarea id="mail-item" rows="7" spellcheck="false"></textarea></label>
+                <div class="placeholders">
+                  <span class="muted small">Variables :</span>
+                  <code title="Liste des articles (gabarit du mail)">{{items}}</code><code title="Nombre d'articles">{{count}}</code><code title="Date d'envoi">{{date}}</code>
+                  <code title="Titre (article)">{{title}}</code><code title="Lien (article)">{{link}}</code><code title="Résumé (article)">{{description}}</code><code title="Nom du flux (article)">{{feed}}</code><code title="Date de publication (article)">{{published}}</code>
+                </div>
+                <button id="mail-reset" class="btn btn-ghost btn-sm self-start" type="button">Rétablir les modèles par défaut</button>
+                <div class="preview">
+                  <div class="preview-head"><span class="muted small">Aperçu</span><strong id="preview-subject"></strong></div>
+                  <iframe id="preview-frame" sandbox="" title="Aperçu du mail"></iframe>
+                </div>
+              </div>
+            </details>
+
+            <button id="mail-test" class="btn btn-ghost self-start" type="button"><svg class="ico"><use href="#i-send"/></svg>Envoyer un mail de test</button>
+          </div>
+
+          <div class="savebar">
+            <span id="dirty-hint" class="muted small" hidden>Modifications non enregistrées</span>
+            <button class="btn btn-primary" type="submit">Enregistrer</button>
+          </div>
+        </form>
+      </section>
+
+      <!-- Account -->
+      <section id="view-account" class="view" hidden>
+        <div class="card">
+          <div class="card-head">
+            <div><h3>Passkeys</h3><p class="muted small">Connexion sans mot de passe avec Face ID, Touch ID, Windows Hello ou une clé de sécurité.</p></div>
+          </div>
+          <ul id="passkeys" class="passkeys"></ul>
+          <form id="passkey-add" class="row">
+            <input id="passkey-name" class="grow" placeholder="Nom (ex. iPhone)" maxlength="60" aria-label="Nom de la passkey">
+            <button class="btn btn-primary" type="submit"><svg class="ico"><use href="#i-key"/></svg>Ajouter</button>
+          </form>
+          <p id="passkey-hint" class="hint" hidden></p>
+        </div>
+
+        <div class="card">
+          <h3>Mot de passe</h3>
+          <form id="password-form" class="stack">
+            <input type="text" name="username" autocomplete="username" hidden>
+            <label class="field"><span>Actuel</span><input name="current" type="password" autocomplete="current-password" required></label>
+            <label class="field"><span>Nouveau <small>(10 caractères min.)</small></span><input name="new" type="password" autocomplete="new-password" minlength="10" required></label>
+            <button class="btn btn-primary self-start" type="submit">Changer le mot de passe</button>
+          </form>
+        </div>
+
+        <div class="card row between">
+          <div><h3 id="account-name"></h3><p class="muted small">Session valable 14 jours.</p></div>
+          <button id="logout" class="btn btn-danger" type="button">Se déconnecter</button>
+        </div>
+      </section>
+    </div>
+  </div>
 
   <dialog id="confirm-dialog" class="dialog">
     <form method="dialog">
-      <h3>Supprimer ce flux ?</h3>
-      <p class="dialog-url" id="confirm-url"></p>
-      <p class="muted">Il ne sera plus relevé ni relayé vers Discord.</p>
+      <h3 id="confirm-title"></h3>
+      <p id="confirm-text" class="muted break"></p>
       <div class="dialog-actions">
         <button class="btn btn-ghost" value="cancel">Annuler</button>
         <button class="btn btn-danger" value="confirm">Supprimer</button>
@@ -90,26 +262,5 @@
   </dialog>
 
   <div id="toasts" class="toasts" aria-live="polite"></div>
-
-  <template id="feed-template">
-    <li class="feed">
-      <span class="status" title="Vérification…"></span>
-      <div class="feed-main">
-        <div class="feed-title"></div>
-        <a class="feed-url" target="_blank" rel="noopener noreferrer"></a>
-      </div>
-      <span class="badge" hidden></span>
-      <div class="feed-actions">
-        <button class="icon-btn act-edit" type="button" title="Modifier" aria-label="Modifier">
-          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20h4L19 9l-4-4L4 16v4Z"/><path d="m13.5 6.5 4 4"/></svg>
-        </button>
-        <button class="icon-btn act-delete" type="button" title="Supprimer" aria-label="Supprimer">
-          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"/></svg>
-        </button>
-      </div>
-    </li>
-  </template>
-
-  <script src="/app.js"></script>
 </body>
 </html>

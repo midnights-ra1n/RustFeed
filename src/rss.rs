@@ -16,7 +16,8 @@ pub async fn fetch_channel(client: &reqwest::Client, url: &str) -> Result<rss::C
     Ok(rss::Channel::read_from(&body[..])?)
 }
 
-pub async fn fetch_feed(client: &reqwest::Client, url: &str) -> Result<Vec<FeedItem>> {
+/// Returns the channel title and its items.
+pub async fn fetch_feed(client: &reqwest::Client, url: &str) -> Result<(String, Vec<FeedItem>)> {
     let channel = fetch_channel(client, url).await?;
 
     let items = channel
@@ -27,8 +28,9 @@ pub async fn fetch_feed(client: &reqwest::Client, url: &str) -> Result<Vec<FeedI
             link: item.link().unwrap_or("").to_string(),
             description: item.description().map(String::from),
             published: item.pub_date().map(String::from),
+            content: item.content().map(String::from),
         })
         .collect();
 
-    Ok(items)
+    Ok((channel.title().to_string(), items))
 }

@@ -1,12 +1,22 @@
-# Initial configuration file
-# Interval is in seconds
+# RustFeed configuration file
+# Everything below can also be changed from the web interface.
 
+# Default delay between two checks of a feed, in seconds
 interval = 1800
 
-webhook = "PUT YOUR WEBHOOK URL HERE"
+# Discord (or any JSON) webhook URL, leave empty to disable
+webhook = ""
 
-# Port of the web interface used to manage feeds
+# Port of the web interface
 web_port = 3060
+
+# Address you open the web interface with. Passkeys only work on this exact
+# origin (https://..., or http://localhost).
+public_url = "http://localhost:3060"
+
+# Set to true when RustFeed runs behind a reverse proxy, so rate limiting
+# uses the client IP from X-Forwarded-For instead of the proxy IP.
+behind_proxy = false
 
 feeds = [
   "https://www.clubic.com/feed/rss"

@@ -1,298 +1,771 @@
 "use strict";
 
 const $ = (sel) => document.querySelector(sel);
+const $$ = (sel) => [...document.querySelectorAll(sel)];
 
-const els = {
-  list: $("#feed-list"),
-  template: $("#feed-template"),
-  empty: $("#empty"),
-  noMatch: $("#no-match"),
-  filter: $("#filter"),
-  addForm: $("#add-form"),
-  addUrl: $("#add-url"),
-  addBtn: $("#add-btn"),
-  addFeedback: $("#add-feedback"),
-  statCount: $("#stat-count"),
-  statOk: $("#stat-ok"),
-  statInterval: $("#stat-interval"),
-  dialog: $("#confirm-dialog"),
-  confirmUrl: $("#confirm-url"),
-  toasts: $("#toasts"),
-  themeToggle: $("#theme-toggle"),
+const INTERVALS = [
+  [300, "5 min"], [900, "15 min"], [1800, "30 min"], [3600, "1 h"], [10800, "3 h"],
+  [21600, "6 h"], [43200, "12 h"], [86400, "24 h"],
+];
+const MAIL_FREQUENCIES = [
+  [0, "À chaque nouveauté"], [900, "Toutes les 15 min"], [3600, "Toutes les heures"], [10800, "Toutes les 3 h"],
+  [21600, "Toutes les 6 h"], [43200, "Deux fois par jour"], [86400, "Une fois par jour"], [604800, "Une fois par semaine"],
+];
+const VIEW_TITLES = { reader: "Lecture", feeds: "Flux", delivery: "Envois", account: "Compte" };
+
+const store = {
+  feeds: [],
+  defaultInterval: 1800,
+  items: [],
+  filter: "unread",
+  feedFilter: "",
+  current: null,
+  settings: null,
+  defaults: null,
 };
 
-let feeds = [];
-// url -> { state: "pending" | "ok" | "error", title, items, error }
-const checks = new Map();
-
-/* ---------- API ---------- */
+/* ================================================================ API */
 
 async function api(method, path, body) {
   const res = await fetch(path, {
     method,
-    headers: body ? { "Content-Type": "application/json" } : undefined,
-    body: body ? JSON.stringify(body) : undefined,
+    credentials: "same-origin",
+    headers: body !== undefined ? { "Content-Type": "application/json" } : undefined,
+    body: body !== undefined ? JSON.stringify(body) : undefined,
   });
   const data = await res.json().catch(() => ({}));
+  if (res.status === 401 && !path.startsWith("/api/auth/")) {
+    showAuth();
+  }
   if (!res.ok) throw new Error(data.error || `Erreur HTTP ${res.status}`);
   return data;
 }
 
-function applyList(data) {
-  feeds = data.feeds;
-  els.statInterval.textContent = formatInterval(data.interval);
-  render();
+/* ================================================================ Auth */
+
+async function boot() {
+  let status;
+  try {
+    status = await api("GET", "/api/auth/status");
+  } catch (err) {
+    toast(`Serveur injoignable : ${err.message}`, true);
+    return;
+  }
+  if (status.authenticated) return startApp();
+  showAuth(status);
 }
 
-async function load() {
+async function showAuth(status) {
+  status = status || (await api("GET", "/api/auth/status").catch(() => ({})));
+  $("#app").hidden = true;
+  $("#auth").hidden = false;
+  $("#setup-form").hidden = !status.setup_required;
+  $("#login-form").hidden = !!status.setup_required;
+  $("#passkey-login").hidden = !(status.passkeys && window.PublicKeyCredential);
+  (status.setup_required ? $("#setup-form [name=code]") : $("#login-form [name=username]")).focus();
+}
+
+function authError(msg) {
+  const el = $("#auth-error");
+  el.textContent = msg || "";
+  el.hidden = !msg;
+}
+
+$("#login-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  authError();
+  const f = e.target;
+  const btn = f.querySelector("[type=submit]");
+  setBusy(btn, true);
   try {
-    applyList(await api("GET", "/api/feeds"));
-    feeds.forEach((url) => checkFeed(url));
+    await api("POST", "/api/auth/login", { username: f.username.value, password: f.password.value });
+    f.reset();
+    startApp();
   } catch (err) {
-    toast(`Impossible de charger les flux : ${err.message}`, true);
+    authError(err.message);
+  } finally {
+    setBusy(btn, false);
+  }
+});
+
+$("#setup-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  authError();
+  const f = e.target;
+  if (f.password.value !== f.confirm.value) return authError("Les mots de passe ne correspondent pas.");
+  const btn = f.querySelector("[type=submit]");
+  setBusy(btn, true);
+  try {
+    await api("POST", "/api/auth/setup", { code: f.code.value, username: f.username.value, password: f.password.value });
+    f.reset();
+    await startApp();
+    location.hash = "#account";
+    toast("Compte créé. Ajoutez une passkey pour vous connecter plus vite.");
+  } catch (err) {
+    authError(err.message);
+  } finally {
+    setBusy(btn, false);
+  }
+});
+
+$("#passkey-login-btn").addEventListener("click", async () => {
+  authError();
+  try {
+    const { id, options } = await api("POST", "/api/auth/passkey/start", {});
+    const cred = await navigator.credentials.get({ publicKey: decodeRequest(options.publicKey) });
+    await api("POST", "/api/auth/passkey/finish", { id, credential: encodeAssertion(cred) });
+    startApp();
+  } catch (err) {
+    if (err.name !== "NotAllowedError") authError(err.message);
+  }
+});
+
+/* ---------- WebAuthn (base64url <-> ArrayBuffer) ---------- */
+
+function b64uToBuf(s) {
+  const bin = atob(s.replace(/-/g, "+").replace(/_/g, "/").padEnd(Math.ceil(s.length / 4) * 4, "="));
+  return Uint8Array.from(bin, (c) => c.charCodeAt(0)).buffer;
+}
+
+function bufToB64u(buf) {
+  let bin = "";
+  for (const b of new Uint8Array(buf)) bin += String.fromCharCode(b);
+  return btoa(bin).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+
+function decodeCreation(pk) {
+  return {
+    ...pk,
+    challenge: b64uToBuf(pk.challenge),
+    user: { ...pk.user, id: b64uToBuf(pk.user.id) },
+    excludeCredentials: (pk.excludeCredentials || []).map((c) => ({ ...c, id: b64uToBuf(c.id) })),
+  };
+}
+
+function decodeRequest(pk) {
+  return {
+    ...pk,
+    challenge: b64uToBuf(pk.challenge),
+    allowCredentials: (pk.allowCredentials || []).map((c) => ({ ...c, id: b64uToBuf(c.id) })),
+  };
+}
+
+function encodeAttestation(cred) {
+  return {
+    id: cred.id,
+    rawId: bufToB64u(cred.rawId),
+    type: cred.type,
+    extensions: cred.getClientExtensionResults(),
+    response: {
+      attestationObject: bufToB64u(cred.response.attestationObject),
+      clientDataJSON: bufToB64u(cred.response.clientDataJSON),
+      transports: cred.response.getTransports ? cred.response.getTransports() : undefined,
+    },
+  };
+}
+
+function encodeAssertion(cred) {
+  const r = cred.response;
+  return {
+    id: cred.id,
+    rawId: bufToB64u(cred.rawId),
+    type: cred.type,
+    extensions: cred.getClientExtensionResults(),
+    response: {
+      authenticatorData: bufToB64u(r.authenticatorData),
+      clientDataJSON: bufToB64u(r.clientDataJSON),
+      signature: bufToB64u(r.signature),
+      userHandle: r.userHandle ? bufToB64u(r.userHandle) : null,
+    },
+  };
+}
+
+/* ================================================================ Shell */
+
+let started = false;
+
+async function startApp() {
+  $("#auth").hidden = true;
+  $("#app").hidden = false;
+  authError();
+  route();
+  await Promise.all([loadFeeds(), loadItems(), loadSettings(), loadAccount()]).catch((err) => toast(err.message, true));
+  if (!started) {
+    started = true;
+    // Picks up new articles while the app stays open.
+    setInterval(() => { if (!document.hidden && !$("#app").hidden) { loadItems(); loadFeeds(); } }, 60000);
   }
 }
 
-async function checkFeed(url, force = false) {
-  if (!force && checks.has(url)) return checks.get(url);
-  checks.set(url, { state: "pending" });
-  updateRow(url);
-  let result;
+function route() {
+  const view = (location.hash || "#reader").slice(1);
+  const name = VIEW_TITLES[view] ? view : "reader";
+  for (const v of Object.keys(VIEW_TITLES)) $(`#view-${v}`).hidden = v !== name;
+  $$(".nav-item").forEach((a) => a.classList.toggle("active", a.dataset.view === name));
+  $("#view-title").textContent = VIEW_TITLES[name];
+  if (name !== "reader") closeArticle();
+}
+
+window.addEventListener("hashchange", route);
+
+$("#refresh-btn").addEventListener("click", async () => {
+  const btn = $("#refresh-btn");
+  btn.classList.add("spinning");
   try {
-    const data = await api("POST", "/api/check", { url });
-    result = { state: "ok", title: data.title, items: data.items };
+    await api("POST", "/api/refresh", {});
+    // The server checks feeds in the background: give it a moment.
+    await new Promise((r) => setTimeout(r, 4000));
+    await Promise.all([loadItems(), loadFeeds()]);
+    toast("Flux relevés");
   } catch (err) {
-    result = { state: "error", error: err.message };
+    toast(err.message, true);
+  } finally {
+    btn.classList.remove("spinning");
   }
-  checks.set(url, result);
-  updateRow(url);
-  updateStats();
-  return result;
+});
+
+$("#theme-toggle").addEventListener("click", () => {
+  const light = document.documentElement.dataset.theme !== "light";
+  if (light) document.documentElement.dataset.theme = "light";
+  else delete document.documentElement.dataset.theme;
+  try { localStorage.setItem("rustfeed-theme", light ? "light" : "dark"); } catch (_) {}
+  $('meta[name="theme-color"]').content = light ? "#fbf7f4" : "#120e0d";
+  if (store.current) renderArticleFrame();
+});
+
+/* ================================================================ Reader */
+
+async function loadItems() {
+  const data = await api("GET", "/api/items");
+  store.items = data.items;
+  renderItems();
 }
 
-/* ---------- Rendering ---------- */
-
-function render() {
-  els.list.replaceChildren(...feeds.map(buildRow));
-  applyFilter();
-  updateStats();
+function visibleItems() {
+  return store.items.filter((i) =>
+    (store.filter === "all" || !i.read || i.link === store.current?.link) &&
+    (!store.feedFilter || i.feed === store.feedFilter));
 }
 
-function buildRow(url) {
-  const li = els.template.content.firstElementChild.cloneNode(true);
-  li.dataset.url = url;
-  li.querySelector(".act-edit").addEventListener("click", () => startEdit(li, url));
-  li.querySelector(".act-delete").addEventListener("click", () => confirmDelete(url));
-  fillRow(li, url);
+function renderItems() {
+  const list = visibleItems();
+  $("#items").replaceChildren(...list.slice(0, 200).map(itemRow));
+  $("#items-empty").hidden = list.length !== 0;
+  const unread = store.items.filter((i) => !i.read).length;
+  $("#unread-badge").hidden = unread === 0;
+  $("#unread-badge").textContent = unread > 99 ? "99+" : unread;
+  if (navigator.setAppBadge) (unread ? navigator.setAppBadge(unread) : navigator.clearAppBadge()).catch(() => {});
+}
+
+function itemRow(item) {
+  const li = document.createElement("li");
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.className = `item${item.read ? "" : " unread"}${store.current?.link === item.link ? " selected" : ""}`;
+  btn.innerHTML = `<div class="item-meta"><span class="eyebrow"></span><time></time></div><div class="item-title"></div><div class="item-summary"></div>`;
+  btn.querySelector(".eyebrow").textContent = item.feed_title;
+  btn.querySelector("time").textContent = timeAgo(itemDate(item));
+  btn.querySelector(".item-title").textContent = item.title;
+  btn.querySelector(".item-summary").textContent = item.summary;
+  btn.addEventListener("click", () => openArticle(item));
+  li.append(btn);
   return li;
 }
 
-function fillRow(li, url) {
-  const check = checks.get(url) || { state: "pending" };
-  const status = li.querySelector(".status");
-  const title = li.querySelector(".feed-title");
-  const link = li.querySelector(".feed-url");
-  const badge = li.querySelector(".badge");
-
-  status.className = `status ${check.state === "pending" ? "" : check.state}`;
-  link.href = url;
-  link.textContent = url;
-  title.replaceChildren();
-
-  if (check.state === "ok") {
-    status.title = "Flux valide";
-    title.textContent = check.title || hostname(url);
-    badge.hidden = false;
-    badge.textContent = `${check.items} article${check.items > 1 ? "s" : ""}`;
-  } else if (check.state === "error") {
-    status.title = check.error;
-    title.append(hostname(url), " ");
-    const err = document.createElement("span");
-    err.className = "err";
-    err.textContent = "· flux injoignable ou invalide";
-    err.title = check.error;
-    title.append(err);
-    badge.hidden = true;
-  } else {
-    status.title = "Vérification…";
-    title.textContent = hostname(url);
-    badge.hidden = true;
+async function openArticle(item) {
+  store.current = { ...item, content: null };
+  item.read = true;
+  $("#article .article-empty").hidden = true;
+  $("#article .article-body").hidden = false;
+  $("#article-feed").textContent = item.feed_title;
+  $("#article-title").textContent = item.title;
+  $("#article-date").textContent = formatDate(itemDate(item));
+  $("#article-open").href = /^https?:\/\//.test(item.link) ? item.link : "#";
+  $(".reader").classList.add("open");
+  renderItems();
+  renderArticleFrame();
+  try {
+    const data = await api("POST", "/api/items/content", { link: item.link });
+    if (store.current?.link !== item.link) return;
+    store.current.content = data.content;
+    renderArticleFrame();
+  } catch (err) {
+    toast(err.message, true);
   }
 }
 
-function rowFor(url) {
-  return [...els.list.children].find((li) => li.dataset.url === url);
+function renderArticleFrame() {
+  const s = getComputedStyle(document.documentElement);
+  const color = s.getPropertyValue("--text").trim();
+  const muted = s.getPropertyValue("--muted").trim();
+  const accent = s.getPropertyValue("--accent-text").trim();
+  const content = store.current?.content ?? `<p style="color:${muted}">Chargement…</p>`;
+  // Sandboxed (no scripts, no same-origin): the feed's HTML can't touch the app.
+  $("#article-frame").srcdoc = `<!doctype html><html><head><meta charset="utf-8"><base target="_blank">
+<style>
+  html{color-scheme:${document.documentElement.dataset.theme === "light" ? "light" : "dark"}}
+  body{margin:0;padding:4px 20px 40px;font:16.5px/1.7 ui-serif,Georgia,serif;color:${color};background:transparent;overflow-wrap:anywhere}
+  a{color:${accent}} img,video,iframe{max-width:100%;height:auto;border-radius:10px} figure{margin:1em 0}
+  pre{overflow:auto;padding:12px;border-radius:8px;background:rgb(127 127 127/.12)} blockquote{margin:1em 0;padding-left:1em;border-left:3px solid ${accent};color:${muted}}
+  h1,h2,h3{font-family:system-ui,sans-serif;line-height:1.25}
+</style></head><body>${content}</body></html>`;
 }
 
-function updateRow(url) {
-  const li = rowFor(url);
-  if (li && !li.classList.contains("editing")) fillRow(li, url);
+function closeArticle() {
+  $(".reader").classList.remove("open");
 }
 
-function updateStats() {
-  els.statCount.textContent = feeds.length;
-  const ok = feeds.filter((u) => checks.get(u)?.state === "ok").length;
-  const pending = feeds.some((u) => (checks.get(u)?.state ?? "pending") === "pending");
-  els.statOk.textContent = pending && ok === 0 && feeds.length ? "…" : `${ok}/${feeds.length}`;
-  els.empty.hidden = feeds.length !== 0;
-}
-
-function applyFilter() {
-  const q = els.filter.value.trim().toLowerCase();
-  let visible = 0;
-  for (const li of els.list.children) {
-    const url = li.dataset.url;
-    const title = checks.get(url)?.title || "";
-    const match = !q || url.toLowerCase().includes(q) || title.toLowerCase().includes(q);
-    li.hidden = !match;
-    if (match) visible++;
-  }
-  els.noMatch.hidden = !(feeds.length && q && visible === 0);
-}
-
-/* ---------- Add ---------- */
-
-els.addForm.addEventListener("submit", async (e) => {
-  e.preventDefault();
-  const url = els.addUrl.value.trim();
-  if (!url) return;
-  hideFeedback();
-
-  if (feeds.includes(url)) {
-    showFeedback("Ce flux est déjà dans la liste.");
-    return;
-  }
-
-  setBusy(els.addBtn, true, "Vérification…");
-  const check = await checkFeed(url, true);
-  if (check.state === "ok") {
-    await addFeed(url);
-  } else {
-    showFeedback(`Ce flux ne semble pas valide : ${check.error}`, () => addFeed(url));
-  }
-  setBusy(els.addBtn, false);
+$("#article-back").addEventListener("click", () => {
+  closeArticle();
+  store.current = null;
+  renderItems();
 });
 
-async function addFeed(url) {
-  hideFeedback();
-  setBusy(els.addBtn, true, "Ajout…");
-  try {
-    applyList(await api("POST", "/api/feeds", { url }));
-    els.addUrl.value = "";
-    const title = checks.get(url)?.title;
-    toast(title ? `« ${title} » ajouté` : "Flux ajouté");
-  } catch (err) {
-    showFeedback(err.message);
-  } finally {
-    setBusy(els.addBtn, false);
-  }
-}
+$("#article-unread").addEventListener("click", async () => {
+  const cur = store.current;
+  if (!cur) return;
+  const item = store.items.find((i) => i.link === cur.link);
+  if (item) item.read = false;
+  renderItems();
+  await api("POST", "/api/items/read", { links: [cur.link], read: false }).catch((e) => toast(e.message, true));
+  toast("Marqué comme non lu");
+});
 
-function showFeedback(message, forceAction) {
-  const box = els.addFeedback;
-  box.replaceChildren();
-  const msg = document.createElement("span");
-  msg.className = "msg";
-  msg.textContent = message;
-  box.append(msg);
-  if (forceAction) {
-    const btn = document.createElement("button");
-    btn.type = "button";
-    btn.className = "btn btn-ghost btn-sm";
-    btn.textContent = "Ajouter quand même";
-    btn.addEventListener("click", forceAction);
-    box.append(btn);
-  }
-  box.hidden = false;
-}
+$("#mark-all").addEventListener("click", async () => {
+  const targets = visibleItems().filter((i) => !i.read);
+  if (!targets.length) return;
+  targets.forEach((i) => (i.read = true));
+  renderItems();
+  await api("POST", "/api/items/read", { links: targets.map((i) => i.link), read: true }).catch((e) => toast(e.message, true));
+});
 
-function hideFeedback() {
-  els.addFeedback.hidden = true;
-}
+$$(".seg").forEach((b) => b.addEventListener("click", () => {
+  $$(".seg").forEach((x) => x.classList.toggle("active", x === b));
+  store.filter = b.dataset.filter;
+  renderItems();
+}));
 
-/* ---------- Edit ---------- */
+$("#reader-feed").addEventListener("change", (e) => {
+  store.feedFilter = e.target.value;
+  renderItems();
+});
 
-function startEdit(li, url) {
-  li.classList.add("editing");
-  const row = document.createElement("div");
-  row.className = "edit-row";
-
-  const input = document.createElement("input");
-  input.className = "edit-input";
-  input.type = "url";
-  input.value = url;
-  input.setAttribute("aria-label", "Nouvelle URL du flux");
-
-  const save = document.createElement("button");
-  save.type = "button";
-  save.className = "btn btn-primary btn-sm";
-  save.textContent = "Enregistrer";
-
-  const cancel = document.createElement("button");
-  cancel.type = "button";
-  cancel.className = "btn btn-ghost btn-sm";
-  cancel.textContent = "Annuler";
-
-  const restore = () => li.replaceWith(buildRow(url));
-
-  const submit = async () => {
-    const next = input.value.trim();
-    if (!next || next === url) return restore();
-    setBusy(save, true, "…");
-    try {
-      applyList(await api("PUT", "/api/feeds", { old_url: url, url: next }));
-      checks.delete(url);
-      checkFeed(next, true);
-      toast("Flux modifié");
-    } catch (err) {
-      toast(err.message, true);
-      setBusy(save, false);
-      input.focus();
-    }
-  };
-
-  save.addEventListener("click", submit);
-  cancel.addEventListener("click", restore);
-  input.addEventListener("keydown", (e) => {
-    if (e.key === "Enter") { e.preventDefault(); submit(); }
-    if (e.key === "Escape") restore();
+// Swipe right from the article to go back on mobile.
+(() => {
+  let x0 = null;
+  const el = $("#article");
+  el.addEventListener("touchstart", (e) => { x0 = e.touches[0].clientX; }, { passive: true });
+  el.addEventListener("touchend", (e) => {
+    if (x0 !== null && x0 < 60 && e.changedTouches[0].clientX - x0 > 80) $("#article-back").click();
+    x0 = null;
   });
+})();
 
-  row.append(input, save, cancel);
-  li.replaceChildren(row);
-  input.focus();
-  input.select();
+/* ================================================================ Feeds */
+
+async function loadFeeds() {
+  applyFeeds(await api("GET", "/api/feeds"));
 }
 
-/* ---------- Delete ---------- */
+function applyFeeds(data) {
+  store.feeds = data.feeds;
+  store.defaultInterval = data.interval;
+  fillIntervals($("#default-interval"), data.interval);
+  renderFeeds();
 
-function confirmDelete(url) {
-  els.confirmUrl.textContent = url;
-  els.dialog.returnValue = "";
-  els.dialog.showModal();
-  els.dialog.addEventListener("close", async () => {
-    if (els.dialog.returnValue !== "confirm") return;
+  const sel = $("#reader-feed");
+  const prev = sel.value;
+  sel.replaceChildren(new Option("Tous les flux", ""), ...store.feeds.map((f) => new Option(feedName(f), f.url)));
+  sel.value = store.feeds.some((f) => f.url === prev) ? prev : "";
+}
+
+function feedName(f) {
+  return f.status?.title || hostname(f.url);
+}
+
+function fillIntervals(select, value, withDefault = false) {
+  const opts = INTERVALS.map(([v, l]) => new Option(l, v));
+  if (withDefault) opts.unshift(new Option(`Par défaut (${formatInterval(store.defaultInterval)})`, ""));
+  if (value != null && !INTERVALS.some(([v]) => v === value)) opts.push(new Option(formatInterval(value), value));
+  select.replaceChildren(...opts);
+  select.value = value ?? "";
+}
+
+function renderFeeds() {
+  $("#feed-list").replaceChildren(...store.feeds.map(feedRow));
+  $("#feeds-empty").hidden = store.feeds.length !== 0;
+  $("#feed-count").textContent = store.feeds.length;
+  fillIntervals($("#add-interval"), null, true);
+}
+
+function feedRow(feed) {
+  const li = document.createElement("li");
+  li.className = "feed";
+  const st = feed.status;
+  li.innerHTML = `<span class="status"></span>
+    <div class="feed-main"><div class="feed-title"></div><div class="feed-sub"></div></div>
+    <div class="feed-actions">
+      <button class="icon-btn act-edit" type="button" title="Modifier" aria-label="Modifier"><svg class="ico"><use href="#i-edit"/></svg></button>
+      <button class="icon-btn act-delete" type="button" title="Supprimer" aria-label="Supprimer"><svg class="ico"><use href="#i-trash"/></svg></button>
+    </div>`;
+  li.querySelector(".status").classList.add(st ? (st.error ? "error" : "ok") : "pending");
+  li.querySelector(".feed-title").textContent = feedName(feed);
+
+  const sub = li.querySelector(".feed-sub");
+  const every = `toutes les ${formatInterval(feed.interval ?? store.defaultInterval)}`;
+  if (st?.error) {
+    const err = document.createElement("span");
+    err.className = "err";
+    err.textContent = "Injoignable · ";
+    err.title = st.error;
+    sub.append(err);
+  } else if (st) {
+    sub.append(`${st.items} articles · `);
+  } else {
+    sub.append("En attente · ");
+  }
+  const link = document.createElement("a");
+  link.href = feed.url;
+  link.target = "_blank";
+  link.rel = "noopener noreferrer";
+  link.textContent = hostname(feed.url);
+  sub.append(link, ` · ${every}`);
+  if (st?.last_check) sub.title = `Dernier relevé : ${formatDate(new Date(st.last_check * 1000))}`;
+
+  li.querySelector(".act-edit").addEventListener("click", () => editFeed(li, feed));
+  li.querySelector(".act-delete").addEventListener("click", async () => {
+    if (!(await confirmDialog("Supprimer ce flux ?", feed.url))) return;
     try {
-      applyList(await api("DELETE", "/api/feeds", { url }));
-      checks.delete(url);
+      applyFeeds(await api("DELETE", "/api/feeds", { url: feed.url }));
+      store.items = store.items.filter((i) => i.feed !== feed.url);
+      renderItems();
       toast("Flux supprimé");
     } catch (err) {
       toast(err.message, true);
     }
-  }, { once: true });
+  });
+  return li;
 }
 
-/* ---------- Helpers ---------- */
+function editFeed(li, feed) {
+  li.innerHTML = `<div class="feed-edit">
+      <input type="url" aria-label="URL du flux">
+      <select aria-label="Fréquence de vérification"></select>
+      <div class="row"><button class="btn btn-ghost btn-sm" type="button" data-a="cancel">Annuler</button><button class="btn btn-primary btn-sm" type="button" data-a="save">Enregistrer</button></div>
+    </div>`;
+  const input = li.querySelector("input");
+  const select = li.querySelector("select");
+  input.value = feed.url;
+  fillIntervals(select, feed.interval, true);
+  const restore = () => li.replaceWith(feedRow(feed));
+  const save = async () => {
+    const btn = li.querySelector("[data-a=save]");
+    setBusy(btn, true);
+    try {
+      applyFeeds(await api("PUT", "/api/feeds", { old_url: feed.url, url: input.value.trim(), interval: numOrNull(select.value) }));
+      toast("Flux modifié");
+    } catch (err) {
+      toast(err.message, true);
+      setBusy(btn, false);
+    }
+  };
+  li.querySelector("[data-a=cancel]").addEventListener("click", restore);
+  li.querySelector("[data-a=save]").addEventListener("click", save);
+  input.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") { e.preventDefault(); save(); }
+    if (e.key === "Escape") restore();
+  });
+  input.focus();
+}
+
+$("#add-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const url = $("#add-url").value.trim();
+  const interval = numOrNull($("#add-interval").value);
+  const btn = $("#add-btn");
+  if (store.feeds.some((f) => f.url === url)) return toast("Ce flux est déjà dans la liste.", true);
+
+  setBusy(btn, true, "Vérification…");
+  try {
+    let title = null;
+    try {
+      title = (await api("POST", "/api/check", { url })).title;
+    } catch (err) {
+      setBusy(btn, false);
+      if (!(await confirmDialog("Ce flux semble invalide", `${err.message}\n\nL'ajouter quand même ?`, "Ajouter"))) return;
+      setBusy(btn, true);
+    }
+    applyFeeds(await api("POST", "/api/feeds", { url, interval }));
+    $("#add-url").value = "";
+    toast(title ? `« ${title} » ajouté` : "Flux ajouté");
+    setTimeout(() => { loadFeeds(); loadItems(); }, 5000);
+  } catch (err) {
+    toast(err.message, true);
+  } finally {
+    setBusy(btn, false);
+  }
+});
+
+$("#default-interval").addEventListener("change", async (e) => {
+  if (!store.settings) return;
+  try {
+    store.settings = await api("PUT", "/api/settings", { ...store.settings, interval: Number(e.target.value) });
+    await loadFeeds();
+    toast("Fréquence par défaut enregistrée");
+  } catch (err) {
+    toast(err.message, true);
+  }
+});
+
+/* ================================================================ Delivery */
+
+const mf = {
+  webhookEnabled: $("#webhook-enabled"), webhookUrl: $("#webhook-url"),
+  enabled: $("#mail-enabled"), frequency: $("#mail-frequency"),
+  host: $("#smtp-host"), port: $("#smtp-port"), security: $("#smtp-security"),
+  user: $("#smtp-user"), pass: $("#smtp-pass"), from: $("#mail-from"), to: $("#mail-to"),
+  subject: $("#mail-subject"), template: $("#mail-template"), item: $("#mail-item"),
+};
+
+async function loadSettings() {
+  const s = await api("GET", "/api/settings");
+  store.settings = s;
+  if (!store.defaults) store.defaults = { subject: s.mail.subject, template: s.mail.template, item: s.mail.item_template };
+  fillSettings(s);
+}
+
+function fillSettings(s) {
+  mf.webhookEnabled.checked = s.webhook_enabled;
+  mf.webhookUrl.value = s.webhook;
+  mf.enabled.checked = s.mail.enabled;
+  const freqs = MAIL_FREQUENCIES.map(([v, l]) => new Option(l, v));
+  if (!MAIL_FREQUENCIES.some(([v]) => v === s.mail.frequency)) freqs.push(new Option(formatInterval(s.mail.frequency), s.mail.frequency));
+  mf.frequency.replaceChildren(...freqs);
+  mf.frequency.value = s.mail.frequency;
+  mf.host.value = s.mail.smtp_host;
+  mf.port.value = s.mail.smtp_port;
+  mf.security.value = s.mail.security;
+  mf.user.value = s.mail.username;
+  mf.pass.value = "";
+  mf.pass.placeholder = s.password_set ? "•••••••• (inchangé)" : "";
+  mf.from.value = s.mail.from;
+  mf.to.value = s.mail.to.join(", ");
+  mf.subject.value = s.mail.subject;
+  mf.template.value = s.mail.template;
+  mf.item.value = s.mail.item_template;
+  setDirty(false);
+  schedulePreview();
+}
+
+function mailFromForm() {
+  return {
+    enabled: mf.enabled.checked,
+    smtp_host: mf.host.value.trim(),
+    smtp_port: Number(mf.port.value) || 587,
+    security: mf.security.value,
+    username: mf.user.value.trim(),
+    password: mf.pass.value,
+    from: mf.from.value.trim(),
+    to: mf.to.value.split(/[,;\n]/).map((t) => t.trim()).filter(Boolean),
+    frequency: Number(mf.frequency.value),
+    subject: mf.subject.value,
+    template: mf.template.value,
+    item_template: mf.item.value,
+  };
+}
+
+function setDirty(dirty) {
+  $("#dirty-hint").hidden = !dirty;
+}
+
+$("#delivery-form").addEventListener("input", (e) => {
+  setDirty(true);
+  if ([mf.subject, mf.template, mf.item].includes(e.target)) schedulePreview();
+});
+$("#delivery-form").addEventListener("change", () => setDirty(true));
+
+// Suggest the usual port when the security mode changes.
+mf.security.addEventListener("change", () => {
+  mf.port.value = { starttls: 587, tls: 465, none: 25 }[mf.security.value];
+});
+
+let previewTimer;
+function schedulePreview() {
+  clearTimeout(previewTimer);
+  previewTimer = setTimeout(async () => {
+    try {
+      const p = await api("POST", "/api/settings/preview", mailFromForm());
+      $("#preview-subject").textContent = p.subject;
+      $("#preview-frame").srcdoc = `<!doctype html><meta charset="utf-8"><base target="_blank"><body style="margin:0">${p.html}</body>`;
+    } catch (_) {}
+  }, 350);
+}
+
+$$(".placeholders code").forEach((c) => c.addEventListener("click", async () => {
+  try { await navigator.clipboard.writeText(c.textContent); toast(`${c.textContent} copié`); } catch (_) {}
+}));
+
+$("#mail-reset").addEventListener("click", () => {
+  if (!store.defaults) return;
+  mf.subject.value = store.defaults.subject;
+  mf.template.value = store.defaults.template;
+  mf.item.value = store.defaults.item;
+  setDirty(true);
+  schedulePreview();
+});
+
+$("#delivery-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const btn = e.target.querySelector("[type=submit]");
+  setBusy(btn, true);
+  try {
+    const s = await api("PUT", "/api/settings", {
+      interval: store.defaultInterval,
+      webhook: mf.webhookUrl.value.trim(),
+      webhook_enabled: mf.webhookEnabled.checked,
+      mail: mailFromForm(),
+    });
+    store.settings = s;
+    fillSettings(s);
+    toast("Paramètres d'envoi enregistrés");
+  } catch (err) {
+    toast(err.message, true);
+  } finally {
+    setBusy(btn, false);
+  }
+});
+
+$("#webhook-test").addEventListener("click", async (e) => {
+  const btn = e.currentTarget;
+  setBusy(btn, true);
+  try {
+    await api("POST", "/api/settings/test-webhook", { link: mf.webhookUrl.value.trim() });
+    toast("Message de test envoyé");
+  } catch (err) {
+    toast(err.message, true);
+  } finally {
+    setBusy(btn, false);
+  }
+});
+
+$("#mail-test").addEventListener("click", async (e) => {
+  const btn = e.currentTarget;
+  setBusy(btn, true, "Envoi…");
+  try {
+    await api("POST", "/api/settings/test-mail", mailFromForm());
+    toast("Mail de test envoyé");
+  } catch (err) {
+    toast(err.message, true);
+  } finally {
+    setBusy(btn, false);
+  }
+});
+
+/* ================================================================ Account */
+
+async function loadAccount() {
+  renderAccount(await api("GET", "/api/account"));
+}
+
+function renderAccount(acc) {
+  $("#account-name").textContent = acc.username;
+  $("#password-form [name=username]").value = acc.username;
+  const supported = !!window.PublicKeyCredential;
+  const hint = $("#passkey-hint");
+  hint.hidden = acc.passkeys_available && supported;
+  hint.textContent = !supported
+    ? "Ce navigateur ne gère pas les passkeys."
+    : `Passkeys désactivées : ouvrez RustFeed via ${acc.public_url} (réglage public_url de config.toml), en HTTPS ou sur localhost.`;
+  $("#passkey-add").hidden = !hint.hidden;
+
+  $("#passkeys").replaceChildren(...acc.passkeys.map((p) => {
+    const li = document.createElement("li");
+    li.className = "passkey";
+    li.innerHTML = `<svg class="ico"><use href="#i-key"/></svg><div><div class="feed-title"></div><div class="feed-sub"></div></div>
+      <button class="icon-btn" type="button" aria-label="Supprimer"><svg class="ico"><use href="#i-trash"/></svg></button>`;
+    li.querySelector(".feed-title").textContent = p.name;
+    li.querySelector(".feed-sub").textContent = `Ajoutée le ${formatDate(new Date(p.created * 1000))}`;
+    li.querySelector("button").addEventListener("click", async () => {
+      if (!(await confirmDialog("Supprimer cette passkey ?", p.name))) return;
+      try {
+        renderAccount(await api("DELETE", "/api/account/passkey", { id: p.id }));
+        toast("Passkey supprimée");
+      } catch (err) {
+        toast(err.message, true);
+      }
+    });
+    return li;
+  }));
+  if (!acc.passkeys.length) {
+    const li = document.createElement("li");
+    li.className = "muted small";
+    li.textContent = "Aucune passkey pour l'instant.";
+    $("#passkeys").append(li);
+  }
+}
+
+$("#passkey-add").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const btn = e.target.querySelector("[type=submit]");
+  setBusy(btn, true);
+  try {
+    const options = await api("POST", "/api/account/passkey/start", {});
+    const cred = await navigator.credentials.create({ publicKey: decodeCreation(options.publicKey) });
+    renderAccount(await api("POST", "/api/account/passkey/finish", { name: $("#passkey-name").value || guessDevice(), credential: encodeAttestation(cred) }));
+    $("#passkey-name").value = "";
+    toast("Passkey ajoutée");
+  } catch (err) {
+    if (err.name !== "NotAllowedError") toast(err.message, true);
+  } finally {
+    setBusy(btn, false);
+  }
+});
+
+$("#password-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const f = e.target;
+  const btn = f.querySelector("[type=submit]");
+  setBusy(btn, true);
+  try {
+    await api("POST", "/api/account/password", { current: f.current.value, new: f.new.value });
+    f.current.value = "";
+    f.new.value = "";
+    toast("Mot de passe changé. Les autres sessions ont été déconnectées.");
+  } catch (err) {
+    toast(err.message, true);
+  } finally {
+    setBusy(btn, false);
+  }
+});
+
+$("#logout").addEventListener("click", async () => {
+  await api("POST", "/api/auth/logout", {}).catch(() => {});
+  store.items = [];
+  showAuth();
+});
+
+/* ================================================================ Helpers */
+
+function confirmDialog(title, text, okLabel = "Supprimer") {
+  const dlg = $("#confirm-dialog");
+  $("#confirm-title").textContent = title;
+  $("#confirm-text").textContent = text;
+  dlg.querySelector("[value=confirm]").textContent = okLabel;
+  dlg.returnValue = "";
+  dlg.showModal();
+  return new Promise((resolve) => dlg.addEventListener("close", () => resolve(dlg.returnValue === "confirm"), { once: true }));
+}
 
 function setBusy(btn, busy, label) {
   btn.disabled = busy;
-  if (!btn.dataset.label) btn.dataset.label = btn.textContent.trim();
   if (busy) {
+    btn.dataset.html ??= btn.innerHTML;
     const spin = document.createElement("span");
     spin.className = "spinner";
-    btn.replaceChildren(spin, label || btn.dataset.label);
-  } else {
-    btn.replaceChildren(btn.dataset.label);
+    btn.replaceChildren(spin, label || btn.textContent.trim());
+  } else if (btn.dataset.html !== undefined) {
+    btn.innerHTML = btn.dataset.html;
+    delete btn.dataset.html;
   }
 }
 
@@ -300,40 +773,57 @@ function toast(message, isError = false) {
   const el = document.createElement("div");
   el.className = `toast${isError ? " error" : ""}`;
   el.textContent = message;
-  els.toasts.append(el);
+  $("#toasts").append(el);
   setTimeout(() => {
     el.classList.add("leaving");
     setTimeout(() => el.remove(), 300);
-  }, isError ? 5000 : 2800);
+  }, isError ? 5500 : 2800);
+}
+
+function numOrNull(v) {
+  return v === "" || v == null ? null : Number(v);
 }
 
 function hostname(url) {
   try { return new URL(url).hostname.replace(/^www\./, ""); } catch { return url; }
 }
 
+function itemDate(item) {
+  const d = item.published ? new Date(item.published) : null;
+  return d && !isNaN(d) ? d : new Date(item.fetched_at * 1000);
+}
+
+function timeAgo(date) {
+  const s = (Date.now() - date) / 1000;
+  if (s < 60) return "à l'instant";
+  if (s < 3600) return `${Math.floor(s / 60)} min`;
+  if (s < 86400) return `${Math.floor(s / 3600)} h`;
+  if (s < 7 * 86400) return `${Math.floor(s / 86400)} j`;
+  return date.toLocaleDateString("fr-FR", { day: "numeric", month: "short" });
+}
+
+function formatDate(date) {
+  return date.toLocaleString("fr-FR", { dateStyle: "medium", timeStyle: "short" });
+}
+
 function formatInterval(secs) {
   if (!Number.isFinite(secs)) return "–";
-  if (secs < 60) return `${secs} s`;
-  const h = Math.floor(secs / 3600);
-  const m = Math.round((secs % 3600) / 60);
-  if (h === 0) return `${m} min`;
-  return m ? `${h} h ${m}` : `${h} h`;
+  if (secs < 3600) return `${Math.round(secs / 60)} min`;
+  if (secs < 86400) return `${Math.round(secs / 360) / 10} h`.replace(".", ",");
+  return `${Math.round(secs / 8640) / 10} j`.replace(".", ",");
 }
 
-/* ---------- Theme ---------- */
-
-function currentTheme() {
-  const forced = document.documentElement.dataset.theme;
-  if (forced) return forced;
-  return matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+function guessDevice() {
+  const ua = navigator.userAgent;
+  if (/iPhone/.test(ua)) return "iPhone";
+  if (/iPad/.test(ua)) return "iPad";
+  if (/Android/.test(ua)) return "Android";
+  if (/Mac/.test(ua)) return "Mac";
+  if (/Windows/.test(ua)) return "Windows";
+  return "Passkey";
 }
 
-els.themeToggle.addEventListener("click", () => {
-  const next = currentTheme() === "dark" ? "light" : "dark";
-  document.documentElement.dataset.theme = next;
-  try { localStorage.setItem("rustfeed-theme", next); } catch (_) {}
-});
+/* ================================================================ Start */
 
-els.filter.addEventListener("input", applyFilter);
-
-load();
+boot();
+if ("serviceWorker" in navigator) navigator.serviceWorker.register("/sw.js").catch(() => {});
