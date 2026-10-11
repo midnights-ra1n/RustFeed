@@ -23,6 +23,9 @@ WORKDIR /app
 
 COPY --from=builder /app/target/release/RustFeed /usr/local/bin/RustFeed
 
+# Configuration, account and articles (managed from the web interface)
+VOLUME /app/data
+
 # Web interface
 EXPOSE 3060
 

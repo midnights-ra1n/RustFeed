@@ -233,6 +233,18 @@
         </div>
 
         <div class="card">
+          <div><h3>Accès</h3><p class="muted small">Les passkeys ne fonctionnent que sur l'adresse enregistrée ici, en HTTPS (ou localhost).</p></div>
+          <div class="row between">
+            <div class="grow"><div class="muted small">Adresse publique</div><div id="public-url" class="feed-title break"></div></div>
+            <button id="use-origin" class="btn btn-ghost btn-sm" type="button" hidden>Utiliser l'adresse actuelle</button>
+          </div>
+          <div class="row between">
+            <div class="grow"><div>Derrière un reverse proxy</div><p class="muted small">Lit l'IP du client dans X-Forwarded-For. N'activez que si un proxy est devant RustFeed.</p></div>
+            <label class="switch"><input id="behind-proxy" type="checkbox"><span></span><em class="sr-only">Derrière un reverse proxy</em></label>
+          </div>
+        </div>
+
+        <div class="card">
           <h3>Mot de passe</h3>
           <form id="password-form" class="stack">
             <input type="text" name="username" autocomplete="username" hidden>

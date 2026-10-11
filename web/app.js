@@ -672,10 +672,15 @@ function renderAccount(acc) {
   $("#password-form [name=username]").value = acc.username;
   const supported = !!window.PublicKeyCredential;
   const hint = $("#passkey-hint");
-  hint.hidden = acc.passkeys_available && supported;
+  hint.hidden = acc.passkeys_available && supported && acc.public_url === location.origin;
+  $("#public-url").textContent = acc.public_url;
+  $("#use-origin").hidden = acc.public_url === location.origin;
+  $("#behind-proxy").checked = acc.behind_proxy;
   hint.textContent = !supported
     ? "Ce navigateur ne gère pas les passkeys."
-    : `Passkeys désactivées : ouvrez RustFeed via ${acc.public_url} (réglage public_url de config.toml), en HTTPS ou sur localhost.`;
+    : acc.public_url !== location.origin
+      ? `Passkeys liées à ${acc.public_url}. Utilisez « Utiliser l'adresse actuelle » dans Accès ci-dessous.`
+      : "Passkeys indisponibles sur cette adresse : il faut un nom de domaine en HTTPS (ou localhost).";
   $("#passkey-add").hidden = !hint.hidden;
 
   $("#passkeys").replaceChildren(...acc.passkeys.map((p) => {
@@ -720,6 +725,19 @@ $("#passkey-add").addEventListener("submit", async (e) => {
     setBusy(btn, false);
   }
 });
+
+async function saveAccess(useOrigin) {
+  try {
+    renderAccount(await api("POST", "/api/account/access", { behind_proxy: $("#behind-proxy").checked, use_current_origin: useOrigin }));
+    toast("Accès enregistré");
+  } catch (err) {
+    toast(err.message, true);
+    loadAccount().catch(() => {});
+  }
+}
+
+$("#use-origin").addEventListener("click", () => saveAccess(true));
+$("#behind-proxy").addEventListener("change", () => saveAccess(false));
 
 $("#password-form").addEventListener("submit", async (e) => {
   e.preventDefault();
