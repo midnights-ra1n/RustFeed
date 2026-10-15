@@ -349,3 +349,25 @@ details.sub .stack { padding-top: 12px; }
 @keyframes slide { from { transform: translateX(30px); opacity: 0; } }
 
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation: none !important; transition: none !important; } }
+
+/* ---------- Folders, tags, quiet hours, exclusions ---------- */
+
+@media (min-width: 640px) { .add-form #add-tags { grid-column: span 2; } }
+.folder-head { display: flex; align-items: center; gap: 8px; padding: 16px 2px 4px; font-size: 0.78rem; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: var(--accent-text); }
+.folder-head .ico { width: 16px; height: 16px; }
+.folder-head + .feed { border-top: 0; }
+.tag { display: inline-block; font-size: 0.72rem; font-weight: 650; padding: 0 7px; margin-left: 6px; border-radius: 99px; background: var(--grad-soft); color: var(--accent-text); }
+
+.chips-group { border: 0; margin: 0; padding: 0; }
+.chips-group legend { padding: 0 0 6px 2px; font-size: 0.86rem; font-weight: 550; color: var(--muted); }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.chip { position: relative; cursor: pointer; }
+.chip input { position: absolute; inset: 0; opacity: 0; margin: 0; cursor: pointer; }
+.chip span { display: inline-block; padding: 5px 12px; border-radius: 99px; border: 1px solid var(--border-strong); font-size: 0.85rem; color: var(--muted); transition: background 0.15s, color 0.15s, border-color 0.15s; }
+.chip input:checked + span { background: var(--grad-soft); border-color: var(--accent); color: var(--accent-text); }
+.chip input:focus-visible + span { box-shadow: 0 0 0 3px rgb(255 122 89 / 0.35); }
+
+.quiet-row { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; padding: 12px; border: 1px solid var(--border); border-radius: var(--radius-sm); }
+.quiet-row input[type="time"] { width: auto; padding: 8px 10px; }
+.quiet-row .chip span { padding: 5px 9px; min-width: 2.2em; text-align: center; }
+@media (max-width: 639px) { .feed-edit > span { display: none; } }

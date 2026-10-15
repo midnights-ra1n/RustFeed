@@ -241,10 +241,19 @@ async function loadItems() {
   renderItems();
 }
 
+// store.feedFilter is "", "feed:<url>", "folder:<name>" or "tag:<name>".
+function matchesFeedFilter(item) {
+  const f = store.feedFilter;
+  if (!f) return true;
+  const [kind, value] = [f.slice(0, f.indexOf(":")), f.slice(f.indexOf(":") + 1)];
+  if (kind === "feed") return item.feed === value;
+  const feed = store.feeds.find((x) => x.url === item.feed);
+  return kind === "folder" ? feed?.folder === value : !!feed?.tags.includes(value);
+}
+
 function visibleItems() {
   return store.items.filter((i) =>
-    (store.filter === "all" || !i.read || i.link === store.current?.link) &&
-    (!store.feedFilter || i.feed === store.feedFilter));
+    (store.filter === "all" || !i.read || i.link === store.current?.link) && matchesFeedFilter(i));
 }
 
 function renderItems() {
@@ -301,10 +310,12 @@ function renderArticleFrame() {
   const accent = s.getPropertyValue("--accent-text").trim();
   const content = store.current?.content ?? `<p style="color:${muted}">Chargement…</p>`;
   // Sandboxed (no scripts, no same-origin): the feed's HTML can't touch the app.
-  $("#article-frame").srcdoc = `<!doctype html><html><head><meta charset="utf-8"><base target="_blank">
+  // The original page's address resolves relative links and images of the article.
+  const base = /^https?:\/\//.test(store.current?.link || "") ? ` href="${store.current.link.replace(/"/g, "&quot;")}"` : "";
+  $("#article-frame").srcdoc = `<!doctype html><html><head><meta charset="utf-8"><base${base} target="_blank">
 <style>
   html{color-scheme:${document.documentElement.dataset.theme === "light" ? "light" : "dark"}}
-  body{margin:0;padding:4px 20px 40px;font:16.5px/1.7 ui-serif,Georgia,serif;color:${color};background:transparent;overflow-wrap:anywhere}
+  body{margin:0;padding:4px 20px 40px;font:16.5px/1.7 ui-serif,Georgia,serif;-webkit-font-smoothing:antialiased;color:${color};background:transparent;overflow-wrap:anywhere}
   a{color:${accent}} img,video,iframe{max-width:100%;height:auto;border-radius:10px} figure{margin:1em 0}
   pre{overflow:auto;padding:12px;border-radius:8px;background:rgb(127 127 127/.12)} blockquote{margin:1em 0;padding-left:1em;border-left:3px solid ${accent};color:${muted}}
   h1,h2,h3{font-family:system-ui,sans-serif;line-height:1.25}
@@ -375,8 +386,48 @@ function applyFeeds(data) {
 
   const sel = $("#reader-feed");
   const prev = sel.value;
-  sel.replaceChildren(new Option("Tous les flux", ""), ...store.feeds.map((f) => new Option(feedName(f), f.url)));
-  sel.value = store.feeds.some((f) => f.url === prev) ? prev : "";
+  const group = (label, options) => {
+    const g = document.createElement("optgroup");
+    g.label = label;
+    g.append(...options);
+    return g;
+  };
+  const folders = allFolders();
+  const tags = allTags();
+  const groups = [new Option("Tous les flux", "")];
+  if (folders.length) groups.push(group("Dossiers", folders.map((f) => new Option(`📁 ${f}`, `folder:${f}`))));
+  if (tags.length) groups.push(group("Tags", tags.map((t) => new Option(`# ${t}`, `tag:${t}`))));
+  for (const [folder, feeds] of feedsByFolder()) {
+    const opts = feeds.map((f) => new Option(feedName(f), `feed:${f.url}`));
+    groups.push(...(folders.length ? [group(folder || "Sans dossier", opts)] : opts));
+  }
+  sel.replaceChildren(...groups);
+  sel.value = [...sel.options].some((o) => o.value === prev) ? prev : "";
+  if (sel.value !== store.feedFilter) { store.feedFilter = sel.value; renderItems(); }
+
+  $("#folder-list").replaceChildren(...folders.map((f) => new Option(f)));
+  renderExclusions();
+}
+
+const byName = (a, b) => a.localeCompare(b, "fr", { sensitivity: "base" });
+
+function allFolders() {
+  return [...new Set(store.feeds.map((f) => f.folder).filter(Boolean))].sort(byName);
+}
+
+function allTags() {
+  return [...new Set(store.feeds.flatMap((f) => f.tags))].sort(byName);
+}
+
+/** [[folder, feeds]] sorted by folder name, feeds without a folder last. */
+function feedsByFolder() {
+  const map = new Map();
+  for (const f of store.feeds) map.set(f.folder, [...(map.get(f.folder) || []), f]);
+  return [...map].sort(([a], [b]) => (!a) - (!b) || byName(a, b));
+}
+
+function parseTags(value) {
+  return value.split(",").map((t) => t.trim()).filter(Boolean);
 }
 
 function feedName(f) {
@@ -392,7 +443,15 @@ function fillIntervals(select, value, withDefault = false) {
 }
 
 function renderFeeds() {
-  $("#feed-list").replaceChildren(...store.feeds.map(feedRow));
+  const grouped = allFolders().length > 0;
+  $("#feed-list").replaceChildren(...feedsByFolder().flatMap(([folder, feeds]) => {
+    if (!grouped) return feeds.map(feedRow);
+    const head = document.createElement("li");
+    head.className = "folder-head";
+    head.innerHTML = `<svg class="ico"><use href="#i-folder"/></svg><span></span>`;
+    head.querySelector("span").textContent = folder || "Sans dossier";
+    return [head, ...feeds.map(feedRow)];
+  }));
   $("#feeds-empty").hidden = store.feeds.length !== 0;
   $("#feed-count").textContent = store.feeds.length;
   fillIntervals($("#add-interval"), null, true);
@@ -410,6 +469,12 @@ function feedRow(feed) {
     </div>`;
   li.querySelector(".status").classList.add(st ? (st.error ? "error" : "ok") : "pending");
   li.querySelector(".feed-title").textContent = feedName(feed);
+  for (const t of feed.tags) {
+    const tag = document.createElement("span");
+    tag.className = "tag";
+    tag.textContent = t;
+    li.querySelector(".feed-title").append(tag);
+  }
 
   const sub = li.querySelector(".feed-sub");
   const every = `toutes les ${formatInterval(feed.interval ?? store.defaultInterval)}`;
@@ -451,18 +516,28 @@ function editFeed(li, feed) {
   li.innerHTML = `<div class="feed-edit">
       <input type="url" aria-label="URL du flux">
       <select aria-label="Fréquence de vérification"></select>
+      <span></span>
+      <input class="f-folder" list="folder-list" placeholder="Dossier" maxlength="64" aria-label="Dossier">
+      <input class="f-tags" placeholder="Tags, séparés par des virgules" aria-label="Tags">
       <div class="row"><button class="btn btn-ghost btn-sm" type="button" data-a="cancel">Annuler</button><button class="btn btn-primary btn-sm" type="button" data-a="save">Enregistrer</button></div>
     </div>`;
   const input = li.querySelector("input");
   const select = li.querySelector("select");
+  const folder = li.querySelector(".f-folder");
+  const tags = li.querySelector(".f-tags");
   input.value = feed.url;
+  folder.value = feed.folder;
+  tags.value = feed.tags.join(", ");
   fillIntervals(select, feed.interval, true);
   const restore = () => li.replaceWith(feedRow(feed));
   const save = async () => {
     const btn = li.querySelector("[data-a=save]");
     setBusy(btn, true);
     try {
-      applyFeeds(await api("PUT", "/api/feeds", { old_url: feed.url, url: input.value.trim(), interval: numOrNull(select.value) }));
+      applyFeeds(await api("PUT", "/api/feeds", {
+        old_url: feed.url, url: input.value.trim(), interval: numOrNull(select.value),
+        folder: folder.value.trim(), tags: parseTags(tags.value),
+      }));
       toast("Flux modifié");
     } catch (err) {
       toast(err.message, true);
@@ -471,10 +546,10 @@ function editFeed(li, feed) {
   };
   li.querySelector("[data-a=cancel]").addEventListener("click", restore);
   li.querySelector("[data-a=save]").addEventListener("click", save);
-  input.addEventListener("keydown", (e) => {
+  li.querySelectorAll("input").forEach((el) => el.addEventListener("keydown", (e) => {
     if (e.key === "Enter") { e.preventDefault(); save(); }
     if (e.key === "Escape") restore();
-  });
+  }));
   input.focus();
 }
 
@@ -495,8 +570,9 @@ $("#add-form").addEventListener("submit", async (e) => {
       if (!(await confirmDialog("Ce flux semble invalide", `${err.message}\n\nL'ajouter quand même ?`, "Ajouter"))) return;
       setBusy(btn, true);
     }
-    applyFeeds(await api("POST", "/api/feeds", { url, interval }));
+    applyFeeds(await api("POST", "/api/feeds", { url, interval, folder: $("#add-folder").value.trim(), tags: parseTags($("#add-tags").value) }));
     $("#add-url").value = "";
+    $("#add-tags").value = "";
     toast(title ? `« ${title} » ajouté` : "Flux ajouté");
     setTimeout(() => { loadFeeds(); loadItems(); }, 5000);
   } catch (err) {
@@ -525,7 +601,10 @@ const mf = {
   host: $("#smtp-host"), port: $("#smtp-port"), security: $("#smtp-security"),
   user: $("#smtp-user"), pass: $("#smtp-pass"), from: $("#mail-from"), to: $("#mail-to"),
   subject: $("#mail-subject"), template: $("#mail-template"), item: $("#mail-item"),
+  timezone: $("#mail-timezone"),
 };
+const DAYS = ["L", "M", "M", "J", "V", "S", "D"];
+const DAY_NAMES = ["lundi", "mardi", "mercredi", "jeudi", "vendredi", "samedi", "dimanche"];
 
 async function loadSettings() {
   const s = await api("GET", "/api/settings");
@@ -553,6 +632,9 @@ function fillSettings(s) {
   mf.subject.value = s.mail.subject;
   mf.template.value = s.mail.template;
   mf.item.value = s.mail.item_template;
+  mf.timezone.value = s.mail.timezone || Intl.DateTimeFormat().resolvedOptions().timeZone || "";
+  $("#quiet-list").replaceChildren(...s.mail.quiet_hours.map(quietRow));
+  renderExclusions({ folders: s.mail.exclude_folders, tags: s.mail.exclude_tags, feeds: s.mail.exclude_feeds });
   setDirty(false);
   schedulePreview();
 }
@@ -571,7 +653,69 @@ function mailFromForm() {
     subject: mf.subject.value,
     template: mf.template.value,
     item_template: mf.item.value,
+    timezone: mf.timezone.value.trim(),
+    quiet_hours: $$("#quiet-list .quiet-row").map((row) => ({
+      days: [...row.querySelectorAll(".day input")].flatMap((c, i) => (c.checked ? [i + 1] : [])),
+      start: row.querySelector(".q-start").value,
+      end: row.querySelector(".q-end").value,
+    })),
+    exclude_folders: checkedValues("#ex-folders"),
+    exclude_tags: checkedValues("#ex-tags"),
+    exclude_feeds: checkedValues("#ex-feeds"),
   };
+}
+
+function chip(value, label, checked, extraClass = "") {
+  const el = document.createElement("label");
+  el.className = `chip ${extraClass}`;
+  el.innerHTML = `<input type="checkbox"><span></span>`;
+  el.querySelector("input").value = value;
+  el.querySelector("input").checked = checked;
+  el.querySelector("span").textContent = label;
+  return el;
+}
+
+function checkedValues(container) {
+  return $$(`${container} input:checked`).map((c) => c.value);
+}
+
+function quietRow(range = { days: [1, 2, 3, 4, 5, 6, 7], start: "22:00", end: "07:00" }) {
+  const row = document.createElement("div");
+  row.className = "quiet-row";
+  row.innerHTML = `<div class="chips" role="group" aria-label="Jours"></div>
+    <input class="q-start" type="time" required aria-label="Début"> → <input class="q-end" type="time" required aria-label="Fin">
+    <span class="spacer"></span>
+    <button class="icon-btn" type="button" title="Supprimer la plage" aria-label="Supprimer la plage"><svg class="ico"><use href="#i-trash"/></svg></button>`;
+  row.querySelector(".chips").append(...DAYS.map((d, i) => {
+    const c = chip(i + 1, d, range.days.includes(i + 1), "day");
+    c.title = DAY_NAMES[i];
+    c.querySelector("input").setAttribute("aria-label", DAY_NAMES[i]);
+    return c;
+  }));
+  row.querySelector(".q-start").value = range.start;
+  row.querySelector(".q-end").value = range.end;
+  row.querySelector("button").addEventListener("click", () => { row.remove(); setDirty(true); });
+  return row;
+}
+
+$("#quiet-add").addEventListener("click", () => {
+  $("#quiet-list").append(quietRow());
+  setDirty(true);
+});
+
+/** Redraws the exclusion chips from the feed list, keeping what is checked (or `selected`). */
+function renderExclusions(selected) {
+  selected ??= { folders: checkedValues("#ex-folders"), tags: checkedValues("#ex-tags"), feeds: checkedValues("#ex-feeds") };
+  const fill = (id, entries, picked) => {
+    // Keep exclusions whose feed/folder/tag no longer exists, so saving doesn't silently drop them.
+    const values = new Set(entries.map(([v]) => v));
+    const all = [...entries, ...picked.filter((v) => !values.has(v)).map((v) => [v, v])];
+    $(id).replaceChildren(...all.map(([v, l]) => chip(v, l, picked.includes(v))));
+    if (!all.length) $(id).innerHTML = `<span class="muted small">Aucun pour l'instant.</span>`;
+  };
+  fill("#ex-folders", allFolders().map((f) => [f, f]), selected.folders);
+  fill("#ex-tags", allTags().map((t) => [t, t]), selected.tags);
+  fill("#ex-feeds", store.feeds.map((f) => [f.url, feedName(f)]), selected.feeds);
 }
 
 function setDirty(dirty) {
@@ -676,6 +820,11 @@ function renderAccount(acc) {
   $("#public-url").textContent = acc.public_url;
   $("#use-origin").hidden = acc.public_url === location.origin;
   $("#behind-proxy").checked = acc.behind_proxy;
+  $("#mcp-enabled").checked = acc.mcp.enabled;
+  $("#mcp-details").hidden = !acc.mcp.enabled || !acc.mcp.url;
+  $("#mcp-url").value = acc.mcp.url || "";
+  $("#mcp-hint").hidden = acc.mcp.https;
+  $("#mcp-hint").textContent = "Disponible uniquement si l'adresse publique (Accès ci-dessus) est en HTTPS.";
   hint.textContent = !supported
     ? "Ce navigateur ne gère pas les passkeys."
     : acc.public_url !== location.origin
@@ -737,6 +886,24 @@ async function saveAccess(useOrigin) {
 }
 
 $("#use-origin").addEventListener("click", () => saveAccess(true));
+
+async function saveMcp(regenerate) {
+  try {
+    renderAccount(await api("POST", "/api/account/mcp", { enabled: $("#mcp-enabled").checked, regenerate }));
+    toast(regenerate ? "Nouvelle URL générée : l'ancienne ne fonctionne plus" : "Serveur MCP enregistré");
+  } catch (err) {
+    toast(err.message, true);
+    loadAccount().catch(() => {});
+  }
+}
+
+$("#mcp-enabled").addEventListener("change", () => saveMcp(false));
+$("#mcp-regenerate").addEventListener("click", async () => {
+  if (await confirmDialog("Régénérer l'URL MCP ?", "Les connecteurs utilisant l'ancienne URL devront être reconfigurés.", "Régénérer")) saveMcp(true);
+});
+$("#mcp-copy").addEventListener("click", async () => {
+  try { await navigator.clipboard.writeText($("#mcp-url").value); toast("URL copiée"); } catch (_) { $("#mcp-url").select(); }
+});
 $("#behind-proxy").addEventListener("change", () => saveAccess(false));
 
 $("#password-form").addEventListener("submit", async (e) => {

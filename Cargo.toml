@@ -21,3 +21,5 @@ openssl = { version = "0.10", features = ["vendored"] }
 argon2 = "0.5"
 getrandom = "0.3"
 lettre = { version = "0.11", default-features = false, features = ["builder", "hostname", "smtp-transport", "tokio1", "tokio1-rustls-tls"] }
+jiff = { version = "0.2.38", features = ["tzdb-bundle-always"] }
+dom_smoothie = "0.18.2"

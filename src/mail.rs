@@ -25,30 +25,10 @@ fn fill(template: &str, vars: &[(&str, &str)]) -> String {
     out
 }
 
-fn date() -> String {
-    // shortcut: UTC date without a time crate, add chrono if a local timezone is needed
-    let days = crate::state::now() / 86400;
-    let (y, m, d) = civil_from_days(days as i64);
-    format!("{d:02}/{m:02}/{y}")
-}
-
-/// Days since 1970-01-01 to (year, month, day), Howard Hinnant's algorithm.
-fn civil_from_days(z: i64) -> (i64, u32, u32) {
-    let z = z + 719468;
-    let era = z.div_euclid(146097);
-    let doe = z.rem_euclid(146097);
-    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let d = (doy - (153 * mp + 2) / 5 + 1) as u32;
-    let m = if mp < 10 { mp + 3 } else { mp - 9 } as u32;
-    (yoe + era * 400 + i64::from(m <= 2), m, d)
-}
-
 /// Returns (subject, html, plain text).
 pub fn render(cfg: &MailConfig, items: &[StoredItem]) -> (String, String, String) {
     let count = items.len().to_string();
-    let date = date();
+    let date = jiff::Timestamp::now().to_zoned(cfg.tz()).strftime("%d/%m/%Y").to_string();
 
     let rows: String = items
         .iter()
@@ -132,11 +112,5 @@ mod tests {
         let (subject, html, _) = render(&cfg, &[item("<script>", "javascript:alert(1)"), item("ok", "https://x")]);
         assert_eq!(subject, "2 new");
         assert_eq!(html, "<b>2</b><a href=\"#\">&lt;script&gt;</a><a href=\"https://x\">ok</a>");
-    }
-
-    #[test]
-    fn civil_dates() {
-        assert_eq!(civil_from_days(0), (1970, 1, 1));
-        assert_eq!(civil_from_days(20737), (2026, 10, 11));
     }
 }

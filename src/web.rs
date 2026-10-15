@@ -17,9 +17,9 @@ use serde_json::{json, Value};
 use webauthn_rs::prelude::{PublicKeyCredential, RegisterPublicKeyCredential};
 
 use crate::app::AppState;
-use crate::config::{self, Feed, MailConfig};
+use crate::config::{self, Feed, MailConfig, parse_hhmm};
 use crate::state::{now, StoredItem};
-use crate::{auth, discord, mail, rss, security};
+use crate::{auth, discord, mail, mcp, rss, security};
 
 const INDEX_HTML: &str = include_str!("../web/index.html");
 const STYLE_CSS: &str = include_str!("../web/style.css");
@@ -50,6 +50,7 @@ pub async fn serve(listener: tokio::net::TcpListener, app: SharedState) -> anyho
         .route("/api/account", get(account))
         .route("/api/account/password", post(change_password))
         .route("/api/account/access", post(set_access))
+        .route("/api/account/mcp", post(set_mcp))
         .route("/api/account/passkey/start", post(passkey_register_start))
         .route("/api/account/passkey/finish", post(passkey_register_finish))
         .route("/api/account/passkey", delete(passkey_delete))
@@ -71,6 +72,8 @@ pub async fn serve(listener: tokio::net::TcpListener, app: SharedState) -> anyho
         .route("/api/auth/logout", post(logout))
         .route("/api/auth/passkey/start", post(passkey_login_start))
         .route("/api/auth/passkey/finish", post(passkey_login_finish))
+        // Authenticated by its own token, not the session cookie.
+        .route("/mcp/{token}", post(mcp::handle).get(mcp::not_allowed).delete(mcp::not_allowed))
         .merge(protected)
         .layer(DefaultBodyLimit::max(256 * 1024))
         .layer(middleware::from_fn_with_state(app.clone(), security::firewall))
@@ -265,7 +268,35 @@ async fn account(State(app): State<SharedState>) -> ApiResult<Json<Value>> {
         "passkeys_available": app.auth.webauthn().is_some(),
         "public_url": app.config.read().unwrap().public_url,
         "behind_proxy": app.config.read().unwrap().behind_proxy,
+        "mcp": mcp_info(&app),
     })))
+}
+
+fn mcp_info(app: &AppState) -> Value {
+    let c = app.config.read().unwrap();
+    let url = (!c.mcp.token.is_empty()).then(|| format!("{}/mcp/{}", c.public_url.trim_end_matches('/'), c.mcp.token));
+    json!({ "enabled": c.mcp.enabled, "active": c.mcp_active(), "url": url, "https": c.public_url.starts_with("https://") })
+}
+
+#[derive(Deserialize)]
+struct McpBody {
+    enabled: bool,
+    #[serde(default)]
+    regenerate: bool,
+}
+
+async fn set_mcp(State(app): State<SharedState>, Json(body): Json<McpBody>) -> ApiResult<Json<Value>> {
+    update_config(&app, |c| {
+        if body.enabled && !c.public_url.starts_with("https://") {
+            return Err(bad_request("Le serveur MCP exige une adresse publique en HTTPS (derrière un reverse proxy)."));
+        }
+        c.mcp.enabled = body.enabled;
+        if body.regenerate || (body.enabled && c.mcp.token.is_empty()) {
+            c.mcp.token = auth::random_token();
+        }
+        Ok(())
+    })?;
+    account(State(app)).await
 }
 
 #[derive(Deserialize)]
@@ -386,6 +417,10 @@ struct FeedBody {
     url: String,
     #[serde(default)]
     interval: Option<u64>,
+    #[serde(default)]
+    folder: String,
+    #[serde(default)]
+    tags: Vec<String>,
 }
 
 #[derive(Deserialize)]
@@ -394,6 +429,25 @@ struct EditBody {
     url: String,
     #[serde(default)]
     interval: Option<u64>,
+    #[serde(default)]
+    folder: String,
+    #[serde(default)]
+    tags: Vec<String>,
+}
+
+/// Validates a folder and tags and returns them trimmed, without duplicates.
+fn validate_labels(folder: &str, tags: &[String]) -> ApiResult<(String, Vec<String>)> {
+    let folder = folder.trim().to_string();
+    let mut clean: Vec<String> = Vec::new();
+    for tag in tags.iter().map(|t| t.trim()).filter(|t| !t.is_empty()) {
+        if !clean.iter().any(|t| t == tag) {
+            clean.push(tag.to_string());
+        }
+    }
+    if folder.chars().count() > 64 || clean.iter().any(|t| t.chars().count() > 32) || clean.len() > 20 {
+        return Err(bad_request("Dossier (64 caractères) ou tags (20 tags de 32 caractères) trop longs."));
+    }
+    Ok((folder, clean))
 }
 
 fn validate_url(raw: &str) -> ApiResult<String> {
@@ -416,7 +470,7 @@ fn feed_list(app: &AppState) -> FeedList {
     let config = app.config.read().unwrap();
     let status = app.status.lock().unwrap();
     let feeds = config.feeds.iter()
-        .map(|f| json!({ "url": f.url, "interval": f.interval, "status": status.get(&f.url) }))
+        .map(|f| json!({ "url": f.url, "interval": f.interval, "folder": f.folder, "tags": f.tags, "status": status.get(&f.url) }))
         .collect();
     FeedList { feeds, interval: config.interval }
 }
@@ -442,11 +496,12 @@ async fn list_feeds(State(app): State<SharedState>) -> Json<FeedList> {
 async fn add_feed(State(app): State<SharedState>, Json(body): Json<FeedBody>) -> ApiResult<(StatusCode, Json<FeedList>)> {
     let url = validate_url(&body.url)?;
     let interval = validate_interval(body.interval)?;
+    let (folder, tags) = validate_labels(&body.folder, &body.tags)?;
     update_config(&app, |c| {
         if c.feeds.iter().any(|f| f.url == url) {
             return Err(ApiError(StatusCode::CONFLICT, "Ce flux existe déjà.".into()));
         }
-        c.feeds.push(Feed { url: url.clone(), interval });
+        c.feeds.push(Feed { url: url.clone(), interval, folder, tags });
         Ok(())
     })?;
 
@@ -459,6 +514,7 @@ async fn add_feed(State(app): State<SharedState>, Json(body): Json<FeedBody>) ->
 async fn edit_feed(State(app): State<SharedState>, Json(body): Json<EditBody>) -> ApiResult<Json<FeedList>> {
     let url = validate_url(&body.url)?;
     let interval = validate_interval(body.interval)?;
+    let (folder, tags) = validate_labels(&body.folder, &body.tags)?;
     update_config(&app, |c| {
         let index = c.feeds.iter()
             .position(|f| f.url == body.old_url)
@@ -466,7 +522,10 @@ async fn edit_feed(State(app): State<SharedState>, Json(body): Json<EditBody>) -
         if url != body.old_url && c.feeds.iter().any(|f| f.url == url) {
             return Err(ApiError(StatusCode::CONFLICT, "Ce flux existe déjà.".into()));
         }
-        c.feeds[index] = Feed { url: url.clone(), interval };
+        c.feeds[index] = Feed { url: url.clone(), interval, folder, tags };
+        for excluded in c.mail.exclude_feeds.iter_mut().filter(|f| **f == body.old_url) {
+            *excluded = url.clone();
+        }
         Ok(())
     })?;
 
@@ -486,6 +545,7 @@ async fn delete_feed(State(app): State<SharedState>, Json(body): Json<FeedBody>)
             .position(|f| f.url == body.url)
             .ok_or_else(|| ApiError(StatusCode::NOT_FOUND, "Flux introuvable.".into()))?;
         c.feeds.remove(index);
+        c.mail.exclude_feeds.retain(|f| *f != body.url);
         Ok(())
     })?;
 
@@ -542,11 +602,14 @@ struct LinkBody {
 }
 
 async fn item_content(State(app): State<SharedState>, Json(body): Json<LinkBody>) -> ApiResult<Json<Value>> {
-    let mut state = app.state.lock().unwrap();
-    let item = state.items.iter().find(|i| i.link == body.link).cloned()
-        .ok_or_else(|| ApiError(StatusCode::NOT_FOUND, "Article introuvable.".into()))?;
-    state.read.insert(item.link.clone());
-    Ok(Json(json!({ "content": item.content.unwrap_or(item.summary) })))
+    let item = {
+        let mut state = app.state.lock().unwrap();
+        let item = state.items.iter().find(|i| i.link == body.link).cloned()
+            .ok_or_else(|| ApiError(StatusCode::NOT_FOUND, "Article introuvable.".into()))?;
+        state.read.insert(item.link.clone());
+        item
+    };
+    Ok(Json(json!({ "content": app.article_html(&item).await })))
 }
 
 #[derive(Deserialize)]
@@ -604,6 +667,23 @@ fn validate_mail(mail: &MailConfig) -> ApiResult<()> {
     if mail.subject.contains(['\r', '\n']) {
         return Err(bad_request("Le sujet ne peut pas contenir de retour à la ligne."));
     }
+    if !mail.timezone.is_empty() && jiff::tz::TimeZone::get(&mail.timezone).is_err() {
+        return Err(bad_request(format!("Fuseau horaire inconnu : {}", mail.timezone)));
+    }
+    if mail.quiet_hours.len() > 20 {
+        return Err(bad_request("20 plages de silence au maximum."));
+    }
+    for range in &mail.quiet_hours {
+        if parse_hhmm(&range.start).is_none() || parse_hhmm(&range.end).is_none() {
+            return Err(bad_request("Horaire de plage de silence invalide (HH:MM)."));
+        }
+        if range.days.is_empty() || range.days.iter().any(|d| !(1..=7).contains(d)) {
+            return Err(bad_request("Choisissez au moins un jour pour chaque plage de silence."));
+        }
+    }
+    if mail.exclude_folders.len() + mail.exclude_tags.len() + mail.exclude_feeds.len() > 1000 {
+        return Err(bad_request("Trop d'exclusions."));
+    }
     if mail.enabled {
         if mail.smtp_host.trim().is_empty() || mail.smtp_port == 0 {
             return Err(bad_request("Serveur SMTP requis."));
@@ -624,6 +704,7 @@ fn incoming_mail(app: &AppState, mut mail: MailConfig) -> MailConfig {
     mail.smtp_host = mail.smtp_host.trim().to_string();
     mail.from = mail.from.trim().to_string();
     mail.to = mail.to.iter().map(|t| t.trim().to_string()).filter(|t| !t.is_empty()).collect();
+    mail.timezone = mail.timezone.trim().to_string();
     if mail.password.is_empty() {
         mail.password = app.config.read().unwrap().mail.password.clone();
     }
