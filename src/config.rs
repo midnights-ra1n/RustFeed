@@ -57,14 +57,38 @@ pub struct Config {
     pub feeds: Vec<Feed>,
     #[serde(default)]
     pub mail: MailConfig,
+    #[serde(default)]
+    pub mcp: McpConfig,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct Feed {
     pub url: String,
     /// Overrides the global interval for this feed, in seconds.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub interval: Option<u64>,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub folder: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tags: Vec<String>,
+}
+
+/// No digest email is sent inside a quiet range.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct QuietRange {
+    /// ISO weekdays the range starts on, 1 = Monday … 7 = Sunday.
+    pub days: Vec<i8>,
+    /// "HH:MM", local time. A range with end <= start runs past midnight.
+    pub start: String,
+    pub end: String,
+}
+
+/// MCP endpoint for LLM clients (Claude, ChatGPT). Only served over HTTPS.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct McpConfig {
+    pub enabled: bool,
+    pub token: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -84,6 +108,12 @@ pub struct MailConfig {
     pub subject: String,
     pub template: String,
     pub item_template: String,
+    /// IANA name (Europe/Paris); empty = the server's timezone.
+    pub timezone: String,
+    pub quiet_hours: Vec<QuietRange>,
+    pub exclude_folders: Vec<String>,
+    pub exclude_tags: Vec<String>,
+    pub exclude_feeds: Vec<String>,
 }
 
 impl Default for MailConfig {
@@ -101,6 +131,11 @@ impl Default for MailConfig {
             subject: DEFAULT_MAIL_SUBJECT.into(),
             template: DEFAULT_MAIL_TEMPLATE.into(),
             item_template: DEFAULT_MAIL_ITEM.into(),
+            timezone: String::new(),
+            quiet_hours: Vec::new(),
+            exclude_folders: Vec::new(),
+            exclude_tags: Vec::new(),
+            exclude_feeds: Vec::new(),
         }
     }
 }
@@ -109,6 +144,54 @@ impl Config {
     pub fn webhook_active(&self) -> bool {
         self.webhook_enabled && self.webhook.starts_with("http")
     }
+
+    /// The MCP endpoint needs a token and an HTTPS public address (reverse proxy).
+    pub fn mcp_active(&self) -> bool {
+        self.mcp.enabled && !self.mcp.token.is_empty() && self.public_url.starts_with("https://")
+    }
+
+    /// True when the article's feed, folder or one of its tags is excluded from the digest.
+    pub fn mail_excluded(&self, feed_url: &str) -> bool {
+        let m = &self.mail;
+        if m.exclude_feeds.iter().any(|f| f == feed_url) {
+            return true;
+        }
+        self.feeds.iter().find(|f| f.url == feed_url).is_some_and(|f| {
+            (!f.folder.is_empty() && m.exclude_folders.contains(&f.folder))
+                || f.tags.iter().any(|t| m.exclude_tags.contains(t))
+        })
+    }
+}
+
+impl MailConfig {
+    pub fn tz(&self) -> jiff::tz::TimeZone {
+        if self.timezone.is_empty() {
+            return jiff::tz::TimeZone::system();
+        }
+        jiff::tz::TimeZone::get(&self.timezone).unwrap_or_else(|_| jiff::tz::TimeZone::system())
+    }
+
+    pub fn is_quiet(&self, at: jiff::Timestamp) -> bool {
+        let local = at.to_zoned(self.tz());
+        let day = local.weekday().to_monday_one_offset();
+        let yesterday = if day == 1 { 7 } else { day - 1 };
+        let minute = i32::from(local.hour()) * 60 + i32::from(local.minute());
+        self.quiet_hours.iter().any(|r| {
+            let (Some(start), Some(end)) = (parse_hhmm(&r.start), parse_hhmm(&r.end)) else { return false };
+            if start < end {
+                r.days.contains(&day) && (start..end).contains(&minute)
+            } else {
+                (r.days.contains(&day) && minute >= start) || (r.days.contains(&yesterday) && minute < end)
+            }
+        })
+    }
+}
+
+/// "HH:MM" to minutes since midnight.
+pub fn parse_hhmm(s: &str) -> Option<i32> {
+    let (h, m) = s.split_once(':')?;
+    let (h, m): (i32, i32) = (h.parse().ok()?, m.parse().ok()?);
+    ((0..24).contains(&h) && (0..60).contains(&m)).then_some(h * 60 + m)
 }
 
 fn yes() -> bool {
@@ -134,7 +217,7 @@ fn feeds_compat<'de, D: Deserializer<'de>>(de: D) -> Result<Vec<Feed>, D::Error>
     Ok(Vec::<Entry>::deserialize(de)?
         .into_iter()
         .map(|e| match e {
-            Entry::Url(url) => Feed { url, interval: None },
+            Entry::Url(url) => Feed { url, ..Default::default() },
             Entry::Full(feed) => feed,
         })
         .collect())
@@ -196,11 +279,49 @@ mod tests {
         let old: Config = toml::from_str(r#"interval = 60
 webhook = "x"
 feeds = ["https://a"]"#).unwrap();
-        assert_eq!(old.feeds, vec![Feed { url: "https://a".into(), interval: None }]);
+        assert_eq!(old.feeds, vec![Feed { url: "https://a".into(), ..Default::default() }]);
         assert_eq!(old.mail.smtp_port, 587);
 
         let text = toml::to_string(&old).unwrap();
         let back: Config = toml::from_str(&text).unwrap();
         assert_eq!(back.feeds, old.feeds);
+    }
+
+    #[test]
+    fn quiet_hours_cross_midnight_and_follow_days() {
+        let mail = MailConfig {
+            timezone: "Europe/Paris".into(),
+            quiet_hours: vec![
+                // Monday night only
+                QuietRange { days: vec![1], start: "22:00".into(), end: "07:00".into() },
+                // Saturday afternoon
+                QuietRange { days: vec![6], start: "12:00".into(), end: "18:00".into() },
+            ],
+            ..Default::default()
+        };
+        // 2026-10-12 is a Monday; Paris is UTC+2 in October.
+        let at = |s: &str| s.parse::<jiff::Timestamp>().unwrap();
+        assert!(mail.is_quiet(at("2026-10-12T21:30:00Z")));  // Mon 23:30
+        assert!(mail.is_quiet(at("2026-10-13T04:00:00Z")));  // Tue 06:00, still Monday's night
+        assert!(!mail.is_quiet(at("2026-10-13T05:30:00Z"))); // Tue 07:30
+        assert!(!mail.is_quiet(at("2026-10-13T21:30:00Z"))); // Tue 23:30
+        assert!(mail.is_quiet(at("2026-10-17T13:00:00Z")));  // Sat 15:00
+        assert!(!mail.is_quiet(at("2026-10-18T13:00:00Z"))); // Sun 15:00
+        assert_eq!(parse_hhmm("24:00"), None);
+    }
+
+    #[test]
+    fn mail_exclusions_match_feed_folder_and_tags() {
+        let mut c: Config = toml::from_str("interval = 60").unwrap();
+        c.feeds = vec![
+            Feed { url: "a".into(), folder: "Tech".into(), ..Default::default() },
+            Feed { url: "b".into(), tags: vec!["sport".into()], ..Default::default() },
+            Feed { url: "c".into(), ..Default::default() },
+        ];
+        assert!(!c.mail_excluded("a"));
+        c.mail.exclude_folders = vec!["Tech".into()];
+        c.mail.exclude_tags = vec!["sport".into()];
+        c.mail.exclude_feeds = vec!["c".into()];
+        assert!(c.mail_excluded("a") && c.mail_excluded("b") && c.mail_excluded("c"));
     }
 }

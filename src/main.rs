@@ -3,6 +3,7 @@ mod auth;
 mod config;
 mod discord;
 mod mail;
+mod mcp;
 mod rss;
 mod models;
 mod security;
@@ -76,7 +77,7 @@ async fn poll_loop(app: Arc<AppState>) {
         last_check.retain(|url, _| config.feeds.iter().any(|f| &f.url == url));
 
         if config.mail.enabled {
-            send_digest(&app, &config.mail).await;
+            send_digest(&app, &config).await;
         }
 
         if let Err(err) = state::save(&app.state.lock().unwrap()) {
@@ -160,11 +161,18 @@ async fn check_feed(app: &AppState, config: &config::Config, url: &str, silent: 
     }
 }
 
-/// Sends the queued articles as one email once the configured frequency has elapsed.
-async fn send_digest(app: &AppState, mail_cfg: &config::MailConfig) {
+/// Sends the queued articles as one email once the configured frequency has elapsed,
+/// outside quiet hours. Excluded feeds, folders and tags are checked at send time so
+/// a blacklist change also applies to what is already queued.
+async fn send_digest(app: &AppState, config: &config::Config) {
+    let mail_cfg = &config.mail;
     let batch = {
-        let state = app.state.lock().unwrap();
-        if state.mail_queue.is_empty() || state::now().saturating_sub(state.last_mail) < mail_cfg.frequency {
+        let mut state = app.state.lock().unwrap();
+        state.mail_queue.retain(|i| !config.mail_excluded(&i.feed));
+        if state.mail_queue.is_empty()
+            || state::now().saturating_sub(state.last_mail) < mail_cfg.frequency
+            || mail_cfg.is_quiet(jiff::Timestamp::now())
+        {
             return;
         }
         state.mail_queue.clone()

@@ -36,6 +36,8 @@
     <symbol id="i-back" viewBox="0 0 24 24"><path d="M15 5 8 12l7 7"/></symbol>
     <symbol id="i-external" viewBox="0 0 24 24"><path d="M14 4h6v6M20 4l-9 9M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5"/></symbol>
     <symbol id="i-check" viewBox="0 0 24 24"><path d="m5 12 5 5 9-10"/></symbol>
+    <symbol id="i-folder" viewBox="0 0 24 24"><path d="M3 6.5A1.5 1.5 0 0 1 4.5 5H9l2 2.5h8.5A1.5 1.5 0 0 1 21 9v9.5a1.5 1.5 0 0 1-1.5 1.5h-15A1.5 1.5 0 0 1 3 18.5Z"/></symbol>
+    <symbol id="i-copy" viewBox="0 0 24 24"><rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V5.5A1.5 1.5 0 0 0 14.5 4h-9A1.5 1.5 0 0 0 4 5.5v9A1.5 1.5 0 0 0 5.5 16H8"/></symbol>
     <symbol id="i-key" viewBox="0 0 24 24"><circle cx="8" cy="15" r="4"/><path d="m11 12 9-9M17 6l3 3M14 9l2 2"/></symbol>
   </svg>
 
@@ -133,7 +135,10 @@
             <input id="add-url" type="url" inputmode="url" placeholder="https://exemple.com/feed.xml" required aria-label="URL du flux RSS">
             <select id="add-interval" aria-label="Fréquence de vérification"></select>
             <button id="add-btn" class="btn btn-primary" type="submit">Ajouter</button>
+            <input id="add-folder" list="folder-list" placeholder="Dossier (facultatif)" maxlength="64" aria-label="Dossier">
+            <input id="add-tags" placeholder="Tags, séparés par des virgules" aria-label="Tags">
           </form>
+          <datalist id="folder-list"></datalist>
           <p class="hint">Le flux est vérifié avant l'ajout. Ses articles actuels sont marqués comme déjà envoyés : seules les nouveautés seront notifiées.</p>
         </div>
 
@@ -185,7 +190,27 @@
                 <label class="field"><span>Utilisateur</span><input id="smtp-user" autocomplete="off" spellcheck="false"></label>
                 <label class="field"><span>Mot de passe</span><input id="smtp-pass" type="password" autocomplete="new-password"></label>
                 <label class="field span-2"><span>Expéditeur</span><input id="mail-from" placeholder="RustFeed &lt;rss@exemple.com&gt;"></label>
-                <label class="field span-2"><span>Destinataires <small>(séparés par des virgules)</small></span><input id="mail-to" placeholder="moi@exemple.com"></label>
+                <label class="field span-2"><span>Destinataires <small>(un ou plusieurs, séparés par des virgules)</small></span><input id="mail-to" placeholder="moi@exemple.com, toi@exemple.com"></label>
+              </div>
+            </details>
+
+            <details class="sub">
+              <summary>Plages de silence</summary>
+              <div class="stack">
+                <p class="hint">Aucun mail pendant ces plages : les nouveautés attendent la fin de la plage. Une plage dont la fin précède le début passe minuit (ex. 22:00 → 07:00).</p>
+                <label class="field"><span>Fuseau horaire</span><input id="mail-timezone" placeholder="Europe/Paris" spellcheck="false"></label>
+                <div id="quiet-list" class="stack"></div>
+                <button id="quiet-add" class="btn btn-ghost btn-sm self-start" type="button">Ajouter une plage</button>
+              </div>
+            </details>
+
+            <details class="sub">
+              <summary>Exclusions</summary>
+              <div class="stack">
+                <p class="hint">Les articles des dossiers, tags ou flux cochés ne sont jamais envoyés par mail (ils restent dans la lecture).</p>
+                <fieldset class="chips-group"><legend>Dossiers</legend><div id="ex-folders" class="chips"></div></fieldset>
+                <fieldset class="chips-group"><legend>Tags</legend><div id="ex-tags" class="chips"></div></fieldset>
+                <fieldset class="chips-group"><legend>Flux</legend><div id="ex-feeds" class="chips"></div></fieldset>
               </div>
             </details>
 
@@ -242,6 +267,22 @@
             <div class="grow"><div>Derrière un reverse proxy</div><p class="muted small">Lit l'IP du client dans X-Forwarded-For. N'activez que si un proxy est devant RustFeed.</p></div>
             <label class="switch"><input id="behind-proxy" type="checkbox"><span></span><em class="sr-only">Derrière un reverse proxy</em></label>
           </div>
+        </div>
+
+        <div class="card">
+          <div class="card-head">
+            <div><h3>Serveur MCP</h3><p class="muted small">Connectez Claude ou ChatGPT à vos articles pour un résumé de la journée ou d'un article. Exige une adresse publique en HTTPS (reverse proxy).</p></div>
+            <label class="switch"><input id="mcp-enabled" type="checkbox"><span></span><em class="sr-only">Activer le serveur MCP</em></label>
+          </div>
+          <div id="mcp-details" class="stack" hidden>
+            <div class="row">
+              <input id="mcp-url" class="grow" readonly aria-label="URL du serveur MCP">
+              <button id="mcp-copy" class="btn btn-ghost" type="button"><svg class="ico"><use href="#i-copy"/></svg>Copier</button>
+            </div>
+            <p class="hint">Ajoutez cette URL comme connecteur personnalisé (Claude : Paramètres → Connecteurs ; ChatGPT : mode développeur → Connecteurs). Elle contient un secret : ne la partagez pas.</p>
+            <button id="mcp-regenerate" class="btn btn-ghost btn-sm self-start" type="button">Régénérer l'URL</button>
+          </div>
+          <p id="mcp-hint" class="hint" hidden></p>
         </div>
 
         <div class="card">

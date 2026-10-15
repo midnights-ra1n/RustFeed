@@ -57,7 +57,7 @@ pub fn random_token() -> String {
 }
 
 /// Constant-time string comparison for secrets.
-fn same(a: &str, b: &str) -> bool {
+pub fn same(a: &str, b: &str) -> bool {
     a.len() == b.len() && a.bytes().zip(b.bytes()).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
 }
 
