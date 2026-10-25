@@ -133,7 +133,14 @@ fn logged_in(app: &AppState) -> Response {
 
 async fn require_session(State(app): State<SharedState>, req: Request, next: Next) -> Response {
     match session_token(req.headers()) {
-        Some(token) if app.auth.valid_session(&token) => next.run(req).await,
+        Some(token) if app.auth.valid_session(&token) => {
+            let renewed = app.auth.renew_session(&token);
+            let mut res = next.run(req).await;
+            if renewed && !res.headers().contains_key(header::SET_COOKIE) {
+                res.headers_mut().insert(header::SET_COOKIE, session_cookie(&app, &token, auth::SESSION_TTL));
+            }
+            res
+        }
         _ => ApiError(StatusCode::UNAUTHORIZED, "Session expirée, reconnectez-vous.".into()).into_response(),
     }
 }
