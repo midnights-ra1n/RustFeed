@@ -193,8 +193,11 @@ async function startApp() {
   loadUpdate();
   if (!started) {
     started = true;
-    // Picks up new articles while the app stays open.
-    setInterval(() => { if (!document.hidden && !$("#app").hidden) { loadItems(); loadFeeds(); } }, 60000);
+    // Picks up new articles while the app stays open, even in a background (pinned) tab,
+    // and catches up at once when the tab comes back (browsers throttle or freeze hidden tabs).
+    const sync = () => { if (!$("#app").hidden) Promise.all([loadItems(), loadFeeds()]).catch(() => {}); };
+    setInterval(sync, 60000);
+    document.addEventListener("visibilitychange", () => { if (!document.hidden) sync(); });
   }
 }
 

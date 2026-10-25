@@ -17,7 +17,11 @@ use webauthn_rs::prelude::*;
 use crate::state::now;
 
 const AUTH_FILE: &str = "data/auth.json";
-pub const SESSION_TTL: u64 = 14 * 24 * 3600;
+/// Hashed session tokens, so sessions survive restarts and updates.
+const SESSIONS_FILE: &str = "data/sessions.json";
+pub const SESSION_TTL: u64 = 30 * 24 * 3600;
+/// Sliding expiry: a session used once a day never expires.
+const SESSION_RENEW_AFTER: u64 = 24 * 3600;
 const CEREMONY_TTL: u64 = 300;
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -40,7 +44,7 @@ pub struct NamedPasskey {
 pub struct Auth {
     account: Mutex<Option<Account>>,
     pub setup_code: String,
-    /// token -> expiry
+    /// sha256(token) -> expiry
     sessions: Mutex<HashMap<String, u64>>,
     /// Rebuilt when `public_url` changes from the web interface.
     webauthn: RwLock<Option<Webauthn>>,
@@ -48,6 +52,10 @@ pub struct Auth {
     registrations: Mutex<HashMap<String, (PasskeyRegistration, u64)>>,
     /// ceremony id -> pending login
     logins: Mutex<HashMap<String, (PasskeyAuthentication, u64)>>,
+}
+
+fn token_key(token: &str) -> String {
+    openssl::sha::sha256(token.as_bytes()).iter().map(|b| format!("{b:02x}")).collect()
 }
 
 pub fn random_token() -> String {
@@ -89,6 +97,16 @@ fn build_webauthn(public_url: &str) -> Option<Webauthn> {
     }
 }
 
+fn save_sessions(sessions: &HashMap<String, u64>) {
+    if cfg!(test) {
+        return;
+    }
+    let res = fs::create_dir_all("data").and_then(|_| fs::write(SESSIONS_FILE, serde_json::to_string(sessions).unwrap_or_default()));
+    if let Err(err) = res {
+        eprintln!("Failed to write {SESSIONS_FILE}: {err}");
+    }
+}
+
 impl Auth {
     pub fn new(public_url: &str) -> Self {
         let account: Option<Account> = fs::read_to_string(AUTH_FILE)
@@ -101,7 +119,9 @@ impl Auth {
         Self {
             account: Mutex::new(account),
             setup_code,
-            sessions: Mutex::new(HashMap::new()),
+            sessions: Mutex::new(
+                fs::read_to_string(SESSIONS_FILE).ok().and_then(|c| serde_json::from_str(&c).ok()).unwrap_or_default(),
+            ),
             webauthn: RwLock::new(build_webauthn(public_url)),
             registrations: Mutex::new(HashMap::new()),
             logins: Mutex::new(HashMap::new()),
@@ -172,7 +192,9 @@ impl Auth {
         acc.password_hash = hash_password(new)?;
         self.store(acc)?;
         // Everyone else gets logged out.
-        self.sessions.lock().unwrap().clear();
+        let mut sessions = self.sessions.lock().unwrap();
+        sessions.clear();
+        save_sessions(&sessions);
         Ok(true)
     }
 
@@ -183,16 +205,34 @@ impl Auth {
         let mut sessions = self.sessions.lock().unwrap();
         let t = now();
         sessions.retain(|_, exp| *exp > t);
-        sessions.insert(token.clone(), t + SESSION_TTL);
+        sessions.insert(token_key(&token), t + SESSION_TTL);
+        save_sessions(&sessions);
         token
     }
 
     pub fn valid_session(&self, token: &str) -> bool {
-        self.sessions.lock().unwrap().get(token).is_some_and(|exp| *exp > now())
+        self.sessions.lock().unwrap().get(&token_key(token)).is_some_and(|exp| *exp > now())
+    }
+
+    /// Pushes a valid session's expiry back to a full TTL, at most once a day.
+    /// Returns true when renewed, so the caller re-issues the cookie.
+    pub fn renew_session(&self, token: &str) -> bool {
+        let mut sessions = self.sessions.lock().unwrap();
+        let t = now();
+        match sessions.get_mut(&token_key(token)) {
+            Some(exp) if *exp > t && *exp < t + SESSION_TTL - SESSION_RENEW_AFTER => {
+                *exp = t + SESSION_TTL;
+                save_sessions(&sessions);
+                true
+            }
+            _ => false,
+        }
     }
 
     pub fn end_session(&self, token: &str) {
-        self.sessions.lock().unwrap().remove(token);
+        let mut sessions = self.sessions.lock().unwrap();
+        sessions.remove(&token_key(token));
+        save_sessions(&sessions);
     }
 
     // ----- passkeys -----
@@ -274,5 +314,19 @@ mod tests {
         assert!(verify_password(&h, "correct horse"));
         assert!(!verify_password(&h, "wrong"));
         assert!(same("abc", "abc") && !same("abc", "abd") && !same("abc", "ab"));
+    }
+
+    #[test]
+    fn session_renewal() {
+        let auth = Auth { sessions: Mutex::new(HashMap::new()), ..Auth::new("http://localhost") };
+        let token = "t".repeat(64);
+        let fresh = now() + SESSION_TTL;
+        auth.sessions.lock().unwrap().insert(token_key(&token), fresh);
+        assert!(auth.valid_session(&token) && !auth.renew_session(&token), "fresh session: no renewal");
+        auth.sessions.lock().unwrap().insert(token_key(&token), now() + 3600);
+        assert!(auth.renew_session(&token) && auth.valid_session(&token));
+        assert!(auth.sessions.lock().unwrap()[&token_key(&token)] >= fresh);
+        auth.sessions.lock().unwrap().insert(token_key(&token), now() - 1);
+        assert!(!auth.renew_session(&token) && !auth.valid_session(&token), "expired stays expired");
     }
 }
