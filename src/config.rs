@@ -59,6 +59,9 @@ pub struct Config {
     pub mail: MailConfig,
     #[serde(default)]
     pub mcp: McpConfig,
+    /// Installs new GitHub releases on its own (.deb installs only).
+    #[serde(default)]
+    pub auto_update: bool,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]

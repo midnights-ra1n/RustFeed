@@ -8,6 +8,7 @@ mod rss;
 mod models;
 mod security;
 mod state;
+mod update;
 mod web;
 
 use std::collections::HashMap;
@@ -47,6 +48,7 @@ async fn main() -> anyhow::Result<()> {
         }
     });
 
+    tokio::spawn(update::auto_loop(app.clone()));
     poll_loop(app).await;
     Ok(())
 }

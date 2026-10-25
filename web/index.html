@@ -286,6 +286,18 @@
         </div>
 
         <div class="card">
+          <div class="card-head">
+            <div><h3>Mise à jour</h3><p id="update-status" class="muted small">Recherche de mise à jour…</p></div>
+            <button id="update-install" class="btn btn-primary btn-sm" type="button" hidden>Installer</button>
+          </div>
+          <div id="auto-update-row" class="row between" hidden>
+            <div class="grow"><div>Mise à jour automatique</div><p class="muted small">Installe les nouvelles versions dès leur sortie (vérification toutes les 6 h).</p></div>
+            <label class="switch"><input id="auto-update" type="checkbox"><span></span><em class="sr-only">Mise à jour automatique</em></label>
+          </div>
+          <p id="update-hint" class="hint" hidden>Installation Docker : mettez à jour avec <code>docker compose pull &amp;&amp; docker compose up -d</code>.</p>
+        </div>
+
+        <div class="card">
           <h3>Mot de passe</h3>
           <form id="password-form" class="stack">
             <input type="text" name="username" autocomplete="username" hidden>
