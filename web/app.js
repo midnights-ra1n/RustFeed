@@ -190,6 +190,7 @@ async function startApp() {
   authError();
   route();
   await Promise.all([loadFeeds(), loadItems(), loadSettings(), loadAccount()]).catch((err) => toast(err.message, true));
+  loadUpdate();
   if (!started) {
     started = true;
     // Picks up new articles while the app stays open.
@@ -315,7 +316,7 @@ function renderArticleFrame() {
   $("#article-frame").srcdoc = `<!doctype html><html><head><meta charset="utf-8"><base${base} target="_blank">
 <style>
   html{color-scheme:${document.documentElement.dataset.theme === "light" ? "light" : "dark"}}
-  body{margin:0;padding:4px 20px 40px;font:16.5px/1.7 ui-serif,Georgia,serif;-webkit-font-smoothing:antialiased;color:${color};background:transparent;overflow-wrap:anywhere}
+  body{margin:0;padding:4px 24px 32px;font:16px/1.55 ui-serif,Georgia,serif;-webkit-font-smoothing:antialiased;color:${color};background:transparent;overflow-wrap:anywhere}
   a{color:${accent}} img,video,iframe{max-width:100%;height:auto;border-radius:10px} figure{margin:1em 0}
   pre{overflow:auto;padding:12px;border-radius:8px;background:rgb(127 127 127/.12)} blockquote{margin:1em 0;padding-left:1em;border-left:3px solid ${accent};color:${muted}}
   h1,h2,h3{font-family:system-ui,sans-serif;line-height:1.25}
@@ -821,6 +822,7 @@ function renderAccount(acc) {
   $("#use-origin").hidden = acc.public_url === location.origin;
   $("#behind-proxy").checked = acc.behind_proxy;
   $("#mcp-enabled").checked = acc.mcp.enabled;
+  $("#auto-update").checked = acc.auto_update;
   $("#mcp-details").hidden = !acc.mcp.enabled || !acc.mcp.url;
   $("#mcp-url").value = acc.mcp.url || "";
   $("#mcp-hint").hidden = acc.mcp.https;
@@ -898,6 +900,56 @@ async function saveMcp(regenerate) {
 }
 
 $("#mcp-enabled").addEventListener("change", () => saveMcp(false));
+
+async function loadUpdate() {
+  try {
+    const u = await api("GET", "/api/update");
+    $("#update-status").textContent = u.available
+      ? `Version ${u.latest} disponible (installée : ${u.current}).`
+      : `Version ${u.current}, à jour.`;
+    $("#update-install").hidden = !(u.available && u.can_install);
+    $("#update-hint").hidden = !u.available || u.can_install;
+    $("#auto-update-row").hidden = !u.can_install;
+  } catch (err) {
+    $("#update-status").textContent = `Impossible de vérifier les mises à jour : ${err.message}`;
+  }
+}
+
+$("#auto-update").addEventListener("change", async (e) => {
+  try {
+    renderAccount(await api("POST", "/api/update/auto", { enabled: e.target.checked }));
+    toast(e.target.checked ? "Mise à jour automatique activée" : "Mise à jour automatique désactivée");
+  } catch (err) {
+    toast(err.message, true);
+    loadAccount().catch(() => {});
+  }
+});
+
+$("#update-install").addEventListener("click", async (e) => {
+  if (!(await confirmDialog("Installer la mise à jour ?", "RustFeed va redémarrer pendant l'installation.", "Installer"))) return;
+  e.target.disabled = true;
+  try {
+    const { version } = await api("GET", "/api/account");
+    await api("POST", "/api/update", {});
+    $("#update-status").textContent = "Installation en cours…";
+    // The server restarts once the package is installed: reload when the new version answers.
+    // Sessions live in memory, so a 401 also means it restarted.
+    const started = Date.now();
+    const poll = setInterval(async () => {
+      const res = await fetch("/api/account", { credentials: "same-origin" }).catch(() => null);
+      const restarted = res && (res.status === 401 || (res.ok && (await res.json()).version !== version));
+      if (restarted) { clearInterval(poll); location.reload(); }
+      else if (Date.now() - started > 180000) {
+        clearInterval(poll);
+        e.target.disabled = false;
+        $("#update-status").textContent = "La mise à jour n'a pas abouti (voir journalctl -u rustfeed-update).";
+      }
+    }, 3000);
+  } catch (err) {
+    e.target.disabled = false;
+    toast(err.message, true);
+  }
+});
 $("#mcp-regenerate").addEventListener("click", async () => {
   if (await confirmDialog("Régénérer l'URL MCP ?", "Les connecteurs utilisant l'ancienne URL devront être reconfigurés.", "Régénérer")) saveMcp(true);
 });

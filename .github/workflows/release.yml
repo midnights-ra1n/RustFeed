@@ -1,0 +1,56 @@
+name: Build and publish .deb release
+
+# Pushing a tag such as v0.2.0 builds rustfeed_<version>-1_<arch>.deb for amd64 and
+# arm64 and publishes them as a GitHub release, where the in-app updater finds them.
+# Built on Debian bookworm (glibc 2.36) so the package also runs on Ubuntu 24.04.
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-24.04, ubuntu-24.04-arm]
+    runs-on: ${{ matrix.runner }}
+    container: rust:1-bookworm
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set version from tag
+        run: sed -i "0,/^version = .*/s//version = \"${GITHUB_REF_NAME#v}\"/" Cargo.toml
+
+      - name: Build package
+        run: |
+          cargo install cargo-deb --locked
+          cargo deb
+
+      - name: Upload package
+        uses: actions/upload-artifact@v4
+        with:
+          name: deb-${{ matrix.runner }}
+          path: target/debian/*.deb
+          if-no-files-found: error
+          retention-days: 1
+
+  release:
+    runs-on: ubuntu-24.04
+    needs: build
+    steps:
+      - name: Download packages
+        uses: actions/download-artifact@v4
+        with:
+          pattern: deb-*
+          merge-multiple: true
+
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release create "$GITHUB_REF_NAME" *.deb --repo "$GITHUB_REPOSITORY" --title "$GITHUB_REF_NAME" --generate-notes

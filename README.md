@@ -139,6 +139,21 @@ docker run -d \
 docker logs rustfeed             # shows the one-time setup code
 ```
 
+### Debian / Ubuntu package (.deb)
+
+Each `v*` tag publishes `rustfeed_<version>-1_amd64.deb` and `_arm64.deb` on the [releases page](https://github.com/midnights-ra1n/RustFeed/releases) (Debian 12+, Ubuntu 24.04+).
+
+```bash
+sudo apt install ./rustfeed_<version>-1_amd64.deb
+journalctl -u rustfeed               # shows the one-time setup code
+```
+
+The package installs a `rustfeed` systemd service running as its own `rustfeed` user, with its data in `/var/lib/rustfeed/data` (kept on removal, deleted by `apt purge rustfeed`).
+
+**Updates:** the **Account → Update** card checks the latest GitHub release. On a .deb install, **Install** asks systemd (`rustfeed-update.path`) to run `/usr/lib/rustfeed/update.sh` as root, which downloads the release's .deb for your architecture from GitHub and installs it; the page reloads on the new version (log in again, sessions don't survive a restart). Failures are in `journalctl -u rustfeed-update`. Turn on **Automatic update** in the same card to install new releases on their own (checked every 6 hours, `auto_update = true` in `config.toml`). Docker installs only show the notice: pull the new image.
+
+To release: bump `version` in `Cargo.toml` (it's also what Docker images report), then push a matching tag, e.g. `git tag v0.2.0 && git push origin v0.2.0`.
+
 ### Without Docker
 
 See [Building from source](#building-from-source).

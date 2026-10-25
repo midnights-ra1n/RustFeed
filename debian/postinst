@@ -1,0 +1,13 @@
+#!/bin/sh
+set -e
+
+if [ "$1" = configure ]; then
+  getent passwd rustfeed >/dev/null || useradd --system --user-group --home-dir /var/lib/rustfeed --shell /usr/sbin/nologin rustfeed
+  install -d -o rustfeed -g rustfeed -m 750 /var/lib/rustfeed /var/lib/rustfeed/data
+  if [ -d /run/systemd/system ]; then
+    systemctl daemon-reload
+    systemctl enable rustfeed.service rustfeed-update.path
+    systemctl start rustfeed-update.path
+    systemctl restart rustfeed.service
+  fi
+fi

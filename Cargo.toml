@@ -23,3 +23,20 @@ getrandom = "0.3"
 lettre = { version = "0.11", default-features = false, features = ["builder", "hostname", "smtp-transport", "tokio1", "tokio1-rustls-tls"] }
 jiff = { version = "0.2.38", features = ["tzdb-bundle-always"] }
 dom_smoothie = "0.18.2"
+
+# .deb package (cargo install cargo-deb && cargo deb): runs as a systemd service,
+# data in /var/lib/rustfeed/data, updates from GitHub releases via the web interface.
+[package.metadata.deb]
+name = "rustfeed"
+maintainer = "midnights-ra1n"
+extended-description = "Self-hosted RSS reader with Discord and email notifications, managed from a web interface on port 3060."
+section = "web"
+depends = "$auto, curl, ca-certificates"
+maintainer-scripts = "debian/"
+assets = [
+    ["target/release/RustFeed", "usr/bin/", "755"],
+    ["debian/update.sh", "usr/lib/rustfeed/update.sh", "755"],
+    ["debian/rustfeed.service", "lib/systemd/system/", "644"],
+    ["debian/rustfeed-update.service", "lib/systemd/system/", "644"],
+    ["debian/rustfeed-update.path", "lib/systemd/system/", "644"],
+]

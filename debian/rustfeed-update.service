@@ -1,0 +1,8 @@
+[Unit]
+Description=Install the latest RustFeed release from GitHub
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/lib/rustfeed/update.sh

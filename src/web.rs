@@ -19,7 +19,7 @@ use webauthn_rs::prelude::{PublicKeyCredential, RegisterPublicKeyCredential};
 use crate::app::AppState;
 use crate::config::{self, Feed, MailConfig, parse_hhmm};
 use crate::state::{now, StoredItem};
-use crate::{auth, discord, mail, mcp, rss, security};
+use crate::{auth, discord, mail, mcp, rss, security, update};
 
 const INDEX_HTML: &str = include_str!("../web/index.html");
 const STYLE_CSS: &str = include_str!("../web/style.css");
@@ -54,6 +54,8 @@ pub async fn serve(listener: tokio::net::TcpListener, app: SharedState) -> anyho
         .route("/api/account/passkey/start", post(passkey_register_start))
         .route("/api/account/passkey/finish", post(passkey_register_finish))
         .route("/api/account/passkey", delete(passkey_delete))
+        .route("/api/update", get(check_update).post(install_update))
+        .route("/api/update/auto", post(set_auto_update))
         .route_layer(middleware::from_fn_with_state(app.clone(), require_session));
 
     let router = Router::new()
@@ -269,6 +271,8 @@ async fn account(State(app): State<SharedState>) -> ApiResult<Json<Value>> {
         "public_url": app.config.read().unwrap().public_url,
         "behind_proxy": app.config.read().unwrap().behind_proxy,
         "mcp": mcp_info(&app),
+        "version": update::CURRENT,
+        "auto_update": app.config.read().unwrap().auto_update,
     })))
 }
 
@@ -575,6 +579,31 @@ async fn refresh(State(app): State<SharedState>) -> Json<Value> {
     app.refresh_all.store(true, Ordering::Relaxed);
     app.wake.notify_one();
     Json(json!({ "ok": true }))
+}
+
+async fn check_update(State(app): State<SharedState>) -> ApiResult<Json<Value>> {
+    update::check(&app.client).await.map(Json).map_err(internal)
+}
+
+async fn install_update() -> ApiResult<Json<Value>> {
+    if !update::can_install() {
+        return Err(bad_request("Mise à jour automatique disponible uniquement pour l'installation .deb."));
+    }
+    update::request_install().map_err(internal)?;
+    Ok(Json(json!({ "ok": true })))
+}
+
+#[derive(Deserialize)]
+struct EnabledBody {
+    enabled: bool,
+}
+
+async fn set_auto_update(State(app): State<SharedState>, Json(body): Json<EnabledBody>) -> ApiResult<Json<Value>> {
+    if body.enabled && !update::can_install() {
+        return Err(bad_request("Mise à jour automatique disponible uniquement pour l'installation .deb."));
+    }
+    update_config(&app, |c| { c.auto_update = body.enabled; Ok(()) })?;
+    account(State(app)).await
 }
 
 // ---------------------------------------------------------------- reader
