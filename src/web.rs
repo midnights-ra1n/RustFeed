@@ -697,6 +697,12 @@ fn validate_mail(mail: &MailConfig) -> ApiResult<()> {
     if mail.frequency > 7 * 86400 {
         return Err(bad_request("La fréquence d'envoi ne peut pas dépasser 7 jours."));
     }
+    if mail.send_times.len() > 24 || mail.send_times.iter().any(|t| parse_hhmm(t).is_none()) {
+        return Err(bad_request("Heures d'envoi invalides (HH:MM, 24 au maximum)."));
+    }
+    if mail.retry && !(60..=86400).contains(&mail.retry_delay) {
+        return Err(bad_request("Le délai de réessai doit être compris entre 1 min et 24 h."));
+    }
     if mail.template.len() + mail.item_template.len() + mail.subject.len() > 100_000 {
         return Err(bad_request("Modèle de mail trop volumineux."));
     }

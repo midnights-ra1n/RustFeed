@@ -11,6 +11,7 @@ const MAIL_FREQUENCIES = [
   [0, "À chaque nouveauté"], [900, "Toutes les 15 min"], [3600, "Toutes les heures"], [10800, "Toutes les 3 h"],
   [21600, "Toutes les 6 h"], [43200, "Deux fois par jour"], [86400, "Une fois par jour"], [604800, "Une fois par semaine"],
 ];
+const RETRY_DELAYS = [[60, "1 min"], [300, "5 min"], [900, "15 min"], [1800, "30 min"], [3600, "1 h"], [10800, "3 h"]];
 const VIEW_TITLES = { reader: "Lecture", feeds: "Flux", delivery: "Envois", account: "Compte" };
 
 const store = {
@@ -602,6 +603,7 @@ $("#default-interval").addEventListener("change", async (e) => {
 const mf = {
   webhookEnabled: $("#webhook-enabled"), webhookUrl: $("#webhook-url"),
   enabled: $("#mail-enabled"), frequency: $("#mail-frequency"),
+  times: $("#mail-times"), retry: $("#mail-retry"), retryDelay: $("#mail-retry-delay"),
   host: $("#smtp-host"), port: $("#smtp-port"), security: $("#smtp-security"),
   user: $("#smtp-user"), pass: $("#smtp-pass"), from: $("#mail-from"), to: $("#mail-to"),
   subject: $("#mail-subject"), template: $("#mail-template"), item: $("#mail-item"),
@@ -625,6 +627,14 @@ function fillSettings(s) {
   if (!MAIL_FREQUENCIES.some(([v]) => v === s.mail.frequency)) freqs.push(new Option(formatInterval(s.mail.frequency), s.mail.frequency));
   mf.frequency.replaceChildren(...freqs);
   mf.frequency.value = s.mail.frequency;
+  mf.times.value = s.mail.send_times.join(", ");
+  mf.frequency.disabled = s.mail.send_times.length > 0;
+  mf.retry.checked = s.mail.retry;
+  const delays = RETRY_DELAYS.map(([v, l]) => new Option(l, v));
+  if (!RETRY_DELAYS.some(([v]) => v === s.mail.retry_delay)) delays.push(new Option(formatInterval(s.mail.retry_delay), s.mail.retry_delay));
+  mf.retryDelay.replaceChildren(...delays);
+  mf.retryDelay.value = s.mail.retry_delay;
+  mf.retryDelay.disabled = !s.mail.retry;
   mf.host.value = s.mail.smtp_host;
   mf.port.value = s.mail.smtp_port;
   mf.security.value = s.mail.security;
@@ -654,6 +664,9 @@ function mailFromForm() {
     from: mf.from.value.trim(),
     to: mf.to.value.split(/[,;\n]/).map((t) => t.trim()).filter(Boolean),
     frequency: Number(mf.frequency.value),
+    send_times: mf.times.value.split(/[,;\s]+/).filter(Boolean),
+    retry: mf.retry.checked,
+    retry_delay: Number(mf.retryDelay.value),
     subject: mf.subject.value,
     template: mf.template.value,
     item_template: mf.item.value,
@@ -729,6 +742,8 @@ function setDirty(dirty) {
 $("#delivery-form").addEventListener("input", (e) => {
   setDirty(true);
   if ([mf.subject, mf.template, mf.item].includes(e.target)) schedulePreview();
+  mf.frequency.disabled = mf.times.value.trim() !== "";
+  mf.retryDelay.disabled = !mf.retry.checked;
 });
 $("#delivery-form").addEventListener("change", () => setDirty(true));
 

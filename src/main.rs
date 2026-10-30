@@ -82,7 +82,7 @@ async fn poll_loop(app: Arc<AppState>) {
             send_digest(&app, &config).await;
         }
 
-        if let Err(err) = state::save(&app.state.lock().unwrap()) {
+        if let Err(err) = state::save(&mut app.state.lock().unwrap()) {
             eprintln!("Failed to save seen state: {err:#}");
         }
 
@@ -163,17 +163,18 @@ async fn check_feed(app: &AppState, config: &config::Config, url: &str, silent: 
     }
 }
 
-/// Sends the queued articles as one email once the configured frequency has elapsed,
-/// outside quiet hours. Excluded feeds, folders and tags are checked at send time so
+/// Sends the queued articles as one email when the frequency or a send time is due,
+/// outside quiet hours; a failed send is retried after `retry_delay` if enabled. Excluded feeds, folders and tags are checked at send time so
 /// a blacklist change also applies to what is already queued.
 async fn send_digest(app: &AppState, config: &config::Config) {
     let mail_cfg = &config.mail;
     let batch = {
         let mut state = app.state.lock().unwrap();
         state.mail_queue.retain(|i| !config.mail_excluded(&i.feed));
+        let now = jiff::Timestamp::now();
         if state.mail_queue.is_empty()
-            || state::now().saturating_sub(state.last_mail) < mail_cfg.frequency
-            || mail_cfg.is_quiet(jiff::Timestamp::now())
+            || !mail_cfg.digest_due(state.last_mail, state.mail_failed, now)
+            || mail_cfg.is_quiet(now)
         {
             return;
         }
@@ -188,11 +189,13 @@ async fn send_digest(app: &AppState, config: &config::Config) {
             let sent: std::collections::HashSet<&String> = batch.iter().map(|i| &i.link).collect();
             state.mail_queue.retain(|i| !sent.contains(&i.link));
             state.last_mail = state::now();
+            state.mail_failed = false;
         }
         Err(err) => {
             eprintln!("Failed to send digest email: {err:#}");
-            // Avoid hammering the SMTP server every tick after a failure.
-            app.state.lock().unwrap().last_mail = state::now();
+            let mut state = app.state.lock().unwrap();
+            state.last_mail = state::now();
+            state.mail_failed = true;
         }
     }
 }

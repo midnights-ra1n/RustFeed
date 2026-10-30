@@ -6,6 +6,7 @@
 // queue, so neither is lost on restart.
 
 use std::collections::HashSet;
+use std::hash::{DefaultHasher, Hash, Hasher};
 use std::fs;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -31,8 +32,14 @@ pub struct State {
     pub read: HashSet<String>,
     #[serde(default)]
     pub mail_queue: Vec<StoredItem>,
+    /// Last digest attempt, successful or not.
     #[serde(default)]
     pub last_mail: u64,
+    #[serde(default)]
+    pub mail_failed: bool,
+    /// Hash of what is on disk, to skip writing an unchanged state.
+    #[serde(skip)]
+    saved_hash: u64,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -66,13 +73,25 @@ pub fn load() -> State {
             read: HashSet::new(),
             mail_queue: Vec::new(),
             last_mail: 0,
+            mail_failed: false,
+            saved_hash: 0,
         })
 }
 
-pub fn save(state: &State) -> Result<()> {
-    fs::create_dir_all(STATE_DIR)?;
+/// Writes the state only when it changed since the last save: most ticks find nothing new.
+pub fn save(state: &mut State) -> Result<()> {
     let content = serde_json::to_string(state)?;
+    let hash = {
+        let mut h = DefaultHasher::new();
+        content.hash(&mut h);
+        h.finish()
+    };
+    if hash == state.saved_hash {
+        return Ok(());
+    }
+    fs::create_dir_all(STATE_DIR)?;
     fs::write(STATE_FILE, content)?;
+    state.saved_hash = hash;
     Ok(())
 }
 

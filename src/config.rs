@@ -108,6 +108,11 @@ pub struct MailConfig {
     pub to: Vec<String>,
     /// Minimum delay between two digest emails, in seconds (0 = after every check).
     pub frequency: u64,
+    /// "HH:MM" local send times; when set they replace `frequency`.
+    pub send_times: Vec<String>,
+    /// After a failed send, try again after `retry_delay` seconds instead of waiting for the next period.
+    pub retry: bool,
+    pub retry_delay: u64,
     pub subject: String,
     pub template: String,
     pub item_template: String,
@@ -131,6 +136,9 @@ impl Default for MailConfig {
             from: String::new(),
             to: Vec::new(),
             frequency: 3600,
+            send_times: Vec::new(),
+            retry: true,
+            retry_delay: 900,
             subject: DEFAULT_MAIL_SUBJECT.into(),
             template: DEFAULT_MAIL_TEMPLATE.into(),
             item_template: DEFAULT_MAIL_ITEM.into(),
@@ -186,6 +194,24 @@ impl MailConfig {
             } else {
                 (r.days.contains(&day) && minute >= start) || (r.days.contains(&yesterday) && minute < end)
             }
+        })
+    }
+
+    /// Whether a digest may go out now. `last` is the last attempt (unix secs), `failed` its outcome.
+    pub fn digest_due(&self, last: u64, failed: bool, at: jiff::Timestamp) -> bool {
+        let now = at.as_second().max(0) as u64;
+        if failed && self.retry {
+            return now.saturating_sub(last) >= self.retry_delay;
+        }
+        if self.send_times.is_empty() {
+            return now.saturating_sub(last) >= self.frequency;
+        }
+        // Due when the latest scheduled time already passed and came after the last attempt.
+        let local = at.to_zoned(self.tz());
+        self.send_times.iter().filter_map(|t| parse_hhmm(t)).any(|m| {
+            let Ok(slot) = local.with().hour((m / 60) as i8).minute((m % 60) as i8).second(0).subsec_nanosecond(0).build() else { return false };
+            let slot = if slot > local { slot.yesterday().ok() } else { Some(slot) };
+            slot.is_some_and(|s| s.timestamp().as_second() as u64 > last)
         })
     }
 }
@@ -311,6 +337,35 @@ feeds = ["https://a"]"#).unwrap();
         assert!(mail.is_quiet(at("2026-10-17T13:00:00Z")));  // Sat 15:00
         assert!(!mail.is_quiet(at("2026-10-18T13:00:00Z"))); // Sun 15:00
         assert_eq!(parse_hhmm("24:00"), None);
+    }
+
+    #[test]
+    fn digest_follows_send_times_and_retry() {
+        let at = |s: &str| s.parse::<jiff::Timestamp>().unwrap();
+        let secs = |s: &str| at(s).as_second() as u64;
+        let mut mail = MailConfig {
+            timezone: "Europe/Paris".into(),
+            send_times: vec!["08:00".into(), "18:00".into()],
+            retry: false,
+            ..Default::default()
+        };
+        // Last sent Mon 08:05 Paris (06:05Z).
+        let last = secs("2026-10-12T06:05:00Z");
+        assert!(!mail.digest_due(last, false, at("2026-10-12T15:00:00Z"))); // 17:00
+        assert!(mail.digest_due(last, false, at("2026-10-12T16:01:00Z")));  // 18:01
+        // Sent at 18:01, nothing until 08:00 the next day.
+        let last = secs("2026-10-12T16:01:00Z");
+        assert!(!mail.digest_due(last, false, at("2026-10-12T22:00:00Z")));
+        assert!(mail.digest_due(last, false, at("2026-10-13T06:00:00Z")));
+        // A failure without retry waits for the next slot; with retry, for the delay.
+        assert!(!mail.digest_due(last, true, at("2026-10-12T16:30:00Z")));
+        mail.retry = true;
+        assert!(mail.digest_due(last, true, at("2026-10-12T16:16:00Z")));
+        assert!(!mail.digest_due(last, true, at("2026-10-12T16:10:00Z")));
+        // No send times: plain frequency.
+        mail.send_times.clear();
+        assert!(mail.digest_due(last, false, at("2026-10-12T17:01:00Z")));
+        assert!(!mail.digest_due(last, false, at("2026-10-12T16:30:00Z")));
     }
 
     #[test]

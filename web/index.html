@@ -178,6 +178,13 @@
 
             <label class="field"><span>Fréquence d'envoi</span><select id="mail-frequency"></select></label>
             <p class="hint">Les nouveautés sont regroupées dans un seul mail au plus une fois par période : fini le bombardement.</p>
+            <label class="field"><span>Heures d'envoi fixes</span><input id="mail-times" placeholder="08:00, 18:00" spellcheck="false"></label>
+            <p class="hint">Si renseignées, le résumé part à ces heures (fuseau des plages de silence) et remplace la fréquence.</p>
+            <div class="row between">
+              <div class="grow"><div>Réessayer en cas d'échec</div><p class="muted small">Sinon, le prochain essai attend la période ou l'heure d'envoi suivante.</p></div>
+              <select id="mail-retry-delay" aria-label="Délai avant réessai"></select>
+              <label class="switch"><input id="mail-retry" type="checkbox"><span></span><em class="sr-only">Réessayer en cas d'échec</em></label>
+            </div>
 
             <details class="sub" open>
               <summary>Serveur SMTP</summary>
